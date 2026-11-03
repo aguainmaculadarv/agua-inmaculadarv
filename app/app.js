@@ -49,9 +49,9 @@ function modal(html, onMount) {
   onMount && onMount(m.querySelector('.box'), close);
   return close;
 }
-function confirmar(texto, okTxt = 'Sí, continuar') {
+function confirmar(texto, okTxt = 'Sí, continuar', cancelTxt = 'Cancelar') {
   return new Promise(res => {
-    modal(`<h2>Confirmar</h2><p>${texto}</p><div class="row"><button class="btn ghost" data-close>Cancelar</button><span class="sp"></span><button class="btn" id="cf-ok">${okTxt}</button></div>`,
+    modal(`<h2>Confirmar</h2><p>${texto}</p><div class="row"><button class="btn ghost" data-close>${cancelTxt}</button><span class="sp"></span><button class="btn" id="cf-ok">${okTxt}</button></div>`,
       (box, close) => { box.querySelector('#cf-ok').onclick = () => { close(); res(true); }; box.querySelector('[data-close]').addEventListener('click', () => res(false)); });
   });
 }
@@ -485,12 +485,27 @@ const VISTAS_PLANTA = {
       if (med === null) throw new Error('Escribe la lectura final del medidor');
       if (ef === null) throw new Error('Escribe el efectivo contado');
       if (med < num(S.turno.medidor_inicial)) throw new Error('La lectura final no puede ser menor a la inicial');
-      if (!(await confirmar('¿Cerrar el turno? Después ya no podrás registrar ventas en él.', 'Sí, cerrar'))) return;
+      // Revisión de caja: primero cuentan a ciegas; antes de cerrar se les dice si falta o sobra.
+      const [vr, gr] = await Promise.all([
+        sb.from('ventas').select('total').eq('turno_id', S.turno.id).eq('forma_pago', 'efectivo').eq('cancelada', false),
+        sb.from('gastos').select('monto').eq('turno_id', S.turno.id).eq('pagado_de_caja', true)]);
+      if (vr.error) throw vr.error; if (gr.error) throw gr.error;
+      const esperado = num(S.turno.caja_inicial) + vr.data.reduce((x, v) => x + num(v.total), 0) - gr.data.reduce((x, g) => x + num(g.monto), 0);
+      const dif = Math.round((ef - esperado) * 100) / 100;
+      if (S.primerConteo?.turno !== S.turno.id) S.primerConteo = { turno: S.turno.id, ef };
+      const primero = S.primerConteo.ef;
+      if (dif !== 0) {
+        const msg = dif < 0 ? `Te <b>faltan ${money(-dif)}</b> en caja.` : `Te <b>sobran ${money(dif)}</b> en caja.`;
+        const seguir = await confirmar(`${msg}<br><br>Vuelve a contar o repón la diferencia y corrige el efectivo. Si ya revisaste, puedes cerrar así.`, 'Cerrar así', 'Volver a contar');
+        if (!seguir) { const i = document.getElementById('ct-ef'); i.focus(); i.select(); return; }
+      } else if (!(await confirmar('La caja cuadra exacto. ¿Cerrar el turno? Después ya no podrás registrar ventas en él.', 'Sí, cerrar'))) return;
+      let notas = val('ct-n') || '';
+      if (primero !== ef) notas = (notas ? notas + ' · ' : '') + `Primer conteo: ${money(primero)} (diferencia ${money(primero - esperado)})`;
       const fm = await subirFoto('ct-fm', 'medidor'), fc = await subirFoto('ct-fc', 'caja');
       const { data: r, error } = await sb.rpc('cerrar_turno', { p_turno_id: S.turno.id, p_medidor_fin: med, p_garrafones_fin: nval('ct-garr'),
-        p_efectivo_contado: ef, p_foto_medidor: fm, p_foto_caja: fc, p_notas: val('ct-n') || null });
+        p_efectivo_contado: ef, p_foto_medidor: fm, p_foto_caja: fc, p_notas: notas || null });
       if (error) throw error;
-      S.turno = null;
+      S.turno = null; S.primerConteo = null;
       mostrarArqueo(main, r);
     });
   }
