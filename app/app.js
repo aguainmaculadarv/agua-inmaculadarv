@@ -1064,6 +1064,8 @@ const VISTAS_DUENO = {
     main.innerHTML = `<div class="card" style="max-width:720px"><h2>Ajustes</h2>
       ${rows.map(c => `<div class="field"><label>${esc(c.descripcion || c.clave)}</label>${c.clave === 'medidor_unidad'
         ? `<select data-k="${c.clave}" data-t="1"><option ${c.texto === 'litros' ? 'selected' : ''}>litros</option><option ${c.texto === 'm3' ? 'selected' : ''}>m3</option></select>`
+        : c.clave === 'datos_transferencia'
+        ? `<textarea data-k="${c.clave}" data-t="1" rows="3" placeholder="Banco: …&#10;CLABE: …&#10;A nombre de: …">${esc(c.texto || '')}</textarea><span class="mut small">Lo ve el cliente en la página de pedidos cuando elige transferencia.</span>`
         : `<input type="number" data-k="${c.clave}" value="${c.valor ?? ''}">`}</div>`).join('')}
       <button class="btn" id="aj-s">Guardar</button></div>`;
     document.getElementById('aj-s').onclick = e => busy(e.currentTarget, async () => {

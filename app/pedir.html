@@ -37,6 +37,8 @@ input:focus,textarea:focus{outline:none;border-color:var(--teal)}
 .alert{padding:13px 14px;border-radius:12px;margin-bottom:14px;font-weight:600}
 .alert.bad{background:var(--bad-l);color:var(--bad)} .alert.ok{background:var(--ok-l);color:var(--ok)} .alert.inf{background:var(--teal-l);color:var(--teal-d)}
 .hidden{display:none!important}
+.banco{background:var(--teal-l);color:var(--teal-d);border-radius:12px;padding:13px 14px;white-space:pre-line;font-weight:600}
+.btn.sec{background:#fff;color:var(--teal-d);border:1.5px solid var(--teal-d);font-size:16px;padding:12px;margin-top:10px}
 .pie{text-align:center;color:var(--mut);font-size:14px;margin:18px 0 30px}
 .pie a{color:var(--teal-d)}
 </style>
@@ -63,6 +65,7 @@ input:focus,textarea:focus{outline:none;border-color:var(--teal)}
     <div class="card">
       <h2>3. ¿Cómo vas a pagar?</h2>
       <div class="pay" id="pago"><button data-fp="efectivo" class="on">Efectivo</button><button data-fp="transferencia">Transferencia</button></div>
+      <div id="banco" class="hidden" style="margin-top:12px"></div>
     </div>
 
     <div class="card hidden" id="nuevo">
@@ -90,7 +93,8 @@ input:focus,textarea:focus{outline:none;border-color:var(--teal)}
 const sb = supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_KEY, { auth: { persistSession: false } });
 const MARCAS = ['Ciel', 'Epura', 'Bluerock', 'Bonafont', 'Rositas'];
 const q = Object.fromEntries(MARCAS.map(m => [m, 0]));
-let precio = 0, fp = 'efectivo', pideDom = false;
+let precio = 0, fp = 'efectivo', pideDom = false, banco = '';
+const WA = '523330334510';
 const $ = id => document.getElementById(id);
 const money = v => '$' + Number(v || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const guardar = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
@@ -104,13 +108,21 @@ const pinta = () => {
   $('tt').textContent = precio ? money(t * precio) : '';
 };
 document.querySelectorAll('.qb').forEach(b => b.onclick = () => { const m = b.dataset.m; q[m] = Math.max(0, Math.min(20, q[m] + Number(b.dataset.d))); pinta(); });
-document.querySelectorAll('#pago button').forEach(b => b.onclick = () => { fp = b.dataset.fp; document.querySelectorAll('#pago button').forEach(x => x.classList.toggle('on', x === b)); });
+const cajaBanco = () => banco ? `<div class="banco">${banco.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</div><button class="btn sec" type="button" onclick="copiarClabe(this)">Copiar CLABE</button>` : '';
+window.copiarClabe = async b => {
+  const m = banco.replace(/\s/g, '').match(/\d{18}/); const t = m ? m[0] : banco;
+  try { await navigator.clipboard.writeText(t); b.textContent = '¡Copiada!'; } catch { b.textContent = 'Mantén presionado el número para copiarlo'; }
+  setTimeout(() => b.textContent = 'Copiar CLABE', 2500);
+};
+const pintaBanco = () => { const el = $('banco'); el.innerHTML = cajaBanco(); el.classList.toggle('hidden', !(fp === 'transferencia' && banco)); };
+document.querySelectorAll('#pago button').forEach(b => b.onclick = () => { fp = b.dataset.fp; document.querySelectorAll('#pago button').forEach(x => x.classList.toggle('on', x === b)); pintaBanco(); });
 
 // recordar teléfono y último pedido en este celular
 $('tel').value = leer('ai_tel');
 try { const u = JSON.parse(leer('ai_ult') || '{}'); MARCAS.forEach(m => { if (u[m]) q[m] = Math.min(20, Number(u[m]) || 0); }); } catch {}
 const f = leer('ai_fp'); if (f) document.querySelector(`#pago [data-fp="${f}"]`)?.click();
 sb.rpc('precio_pedido_en_linea').then(({ data }) => { precio = Number(data) || 0; pinta(); });
+sb.rpc('datos_transferencia').then(({ data }) => { banco = data || ''; pintaBanco(); });
 pinta();
 
 const aviso = (t, c = 'bad') => $('msg').innerHTML = `<div class="alert ${c}">${t}</div>`;
@@ -141,7 +153,9 @@ $('enviar').onclick = async () => {
     $('hecho').innerHTML = `<h2>¡Listo! Recibimos tu pedido</h2>
       <p style="font-size:18px"><b>${Object.entries(marcas).map(([m, n]) => n + ' ' + m).join(' · ')}</b>${r.total ? ' · ' + money(r.total) : ''}</p>
       <p class="mut">${r.nuevo ? 'Como es tu primer pedido, te podemos marcar para confirmar tu domicilio.' : 'Va en camino a tu domicilio registrado.'} Pago: ${fp === 'efectivo' ? 'en efectivo al recibir' : 'por transferencia'}.</p>
-      <button class="btn" onclick="location.reload()" style="margin-top:8px">Hacer otro pedido después</button>`;
+      ${fp === 'transferencia' && banco ? `<h2 style="margin-top:16px">Datos para tu transferencia</h2>${cajaBanco()}
+        <a class="btn" style="margin-top:10px;text-align:center;text-decoration:none" href="https://wa.me/${WA}?text=${encodeURIComponent('Hola, envío mi comprobante de transferencia del pedido #' + r.id)}">Enviar comprobante por WhatsApp</a>` : ''}
+      <button class="btn sec" onclick="location.reload()" style="margin-top:10px">Hacer otro pedido después</button>`;
     window.scrollTo(0, 0);
   } catch (e) {
     aviso('No se pudo enviar. Revisa tu conexión e intenta de nuevo.');
