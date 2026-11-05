@@ -411,8 +411,10 @@ async function vistaPedidos(main) {
       ${(ps || []).map(p => `<tr><td><b>${esc(p.nombre)}</b><br><span class="mut small">${esc(p.domicilio)}</span></td>
         <td>${esc(txtMarcas(p))}<br><span class="mut small">${fmtHora(p.creado_en)} · ${esc(p.forma_pago)}${p.origen === 'cliente' ? ' · <b>pidió en línea</b>' : ''}</span>${p.notas ? `<br><span class="mut small">${esc(p.notas)}</span>` : ''}</td>
         <td>${tag(p.estado)}${p.estado === 'entregado' ? `<br><span class="mut small">${fmtHora(p.entregado_en)} · ${money(p.monto_cobrado)} ${esc(p.forma_pago_real)}</span>` : ''}</td>
-        <td>${p.estado === 'pendiente' ? `<button class="btn sm ghost" data-can="${p.id}">Cancelar</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Sin pedidos hoy</td></tr>'}
-    </tbody></table></div></div>
+        <td>${p.revisar ? `<span class="tag bad">Revisar</span><br><button class="btn sm" data-rev="${p.id}" style="margin:4px 0">${p.cliente_id ? 'Revisado' : 'Guardar cliente'}</button><br>` : ''}${p.estado === 'pendiente' ? `<button class="btn sm ghost" data-can="${p.id}">Cancelar</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Sin pedidos hoy</td></tr>'}
+    </tbody></table></div>
+    <div class="alert inf" style="margin-top:12px">Liga para que tus clientes pidan solos:<br><b id="pd-liga">${esc(new URL('pedir.html', location.href).href)}</b>
+      <div class="row" style="margin-top:8px"><button class="btn sm" id="pd-copiar">Copiar liga</button></div></div></div>
   </div>`;
   const q = Object.fromEntries(MARCAS.map(m => [m, 0]));
   let cli = null, fp = 'efectivo';
@@ -466,6 +468,25 @@ async function vistaPedidos(main) {
       const { error } = await sb.rpc('cancelar_pedido', { p_pedido_id: Number(b.dataset.can), p_motivo: val('cp-m') || 'Sin motivo' });
       if (error) throw error; close(); toast('Pedido cancelado', 'ok'); vistaPedidos(main);
     })));
+  document.getElementById('pd-copiar').onclick = async () => {
+    const t = `Haz tu pedido de garrafones aquí 👉 ${document.getElementById('pd-liga').textContent}`;
+    try { await navigator.clipboard.writeText(t); toast('Liga copiada: pégala en tu respuesta automática de WhatsApp', 'ok'); } catch { toast('Selecciona la liga y cópiala a mano', 'bad'); }
+  };
+  main.querySelectorAll('[data-rev]').forEach(b => b.onclick = () => {
+    const p = ps.find(x => x.id == b.dataset.rev);
+    const com = String(p.notas || '').replace(/^CLIENTE NUEVO · /, '');
+    if (p.cliente_id) return busy(b, async () => { const { error } = await sb.rpc('revisar_pedido', { p_pedido_id: p.id }); if (error) throw error; toast('Marcado como revisado', 'ok'); vistaPedidos(main); });
+    modal(`<h2>Guardar cliente nuevo</h2><p class="mut">Pidió en línea con el teléfono <b>${esc(p.telefono || '')}</b>. Escríbelo como ustedes lo identifican.</p>
+      ${com ? `<div class="alert warn">Comentario: ${esc(com)}</div>` : ''}
+      <div class="field"><label>Nombre (como lo identifican)</label><input type="text" id="rv-n" value="${esc(p.nombre === 'Cliente nuevo' ? '' : p.nombre)}"></div>
+      <div class="field"><label>Domicilio</label><input type="text" id="rv-d" value="${esc(p.domicilio)}"></div>
+      <div class="row"><button class="btn ghost" data-close>Cancelar</button><span class="sp"></span><button class="btn" id="rv-b">Guardar cliente</button></div>`,
+      (box, close) => box.querySelector('#rv-b').onclick = e => busy(e.currentTarget, async () => {
+        if (!val('rv-d')) throw new Error('Escribe el domicilio');
+        const { error } = await sb.rpc('revisar_pedido', { p_pedido_id: p.id, p_guardar_cliente: true, p_nombre: val('rv-n') || null, p_domicilio: val('rv-d') });
+        if (error) throw error; close(); toast('Cliente guardado', 'ok'); vistaPedidos(main);
+      }));
+  });
   pintaQ(); document.getElementById('pd-bus').focus();
 }
 

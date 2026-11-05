@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Haz tu pedido · Agua Inmaculada Real del Valle</title>
+<meta name="description" content="Pide tus garrafones de agua a domicilio en Real del Valle. Agua Inmaculada Real del Valle.">
+<meta name="theme-color" content="#0B6E8A">
+<link rel="icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{--teal:#1BA6C9;--teal-d:#0B6E8A;--teal-l:#E3F5FA;--bg:#F4F8FA;--txt:#16323D;--mut:#5D7681;--line:#D9E5EA;--ok:#1E8E5A;--ok-l:#E2F5EC;--bad:#C62828;--bad-l:#FDE7E7;--warn-l:#FFF3DC}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--txt);font-family:"Nunito Sans",system-ui,sans-serif;font-size:17px;-webkit-tap-highlight-color:transparent}
+button,input,textarea{font:inherit;color:inherit}
+.wrap{max-width:520px;margin:0 auto;padding:16px}
+.logo{display:block;max-width:230px;margin:8px auto 6px}
+.sub{text-align:center;color:var(--mut);margin:0 0 16px}
+.card{background:#fff;border-radius:16px;box-shadow:0 1px 3px rgba(16,50,61,.08),0 4px 14px rgba(16,50,61,.05);padding:18px;margin-bottom:14px}
+h2{font-size:19px;margin:0 0 12px}
+label{display:block;font-weight:700;font-size:15px;margin-bottom:6px}
+input,textarea{width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:12px;background:#fff;font-size:17px}
+input:focus,textarea:focus{outline:none;border-color:var(--teal)}
+.field{margin-bottom:14px}
+.linea{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+.linea:last-child{border-bottom:0}
+.linea .n{flex:1;font-weight:700;font-size:18px}
+.qb{width:46px;height:46px;border-radius:12px;border:0;background:var(--teal-l);color:var(--teal-d);font-size:24px;font-weight:800;cursor:pointer}
+.q{min-width:30px;text-align:center;font-weight:800;font-size:20px}
+.total{display:flex;justify-content:space-between;font-weight:800;font-size:20px;margin-top:12px}
+.pay{display:flex;gap:10px}
+.pay button{flex:1;padding:13px;border-radius:12px;border:1.5px solid var(--line);background:#fff;font-weight:700;cursor:pointer}
+.pay button.on{border-color:var(--teal-d);background:var(--teal-l);color:var(--teal-d)}
+.btn{display:block;width:100%;padding:16px;border:0;border-radius:14px;background:var(--teal-d);color:#fff;font-weight:800;font-size:19px;cursor:pointer}
+.btn:disabled{opacity:.6}
+.alert{padding:13px 14px;border-radius:12px;margin-bottom:14px;font-weight:600}
+.alert.bad{background:var(--bad-l);color:var(--bad)} .alert.ok{background:var(--ok-l);color:var(--ok)} .alert.inf{background:var(--teal-l);color:var(--teal-d)}
+.hidden{display:none!important}
+.pie{text-align:center;color:var(--mut);font-size:14px;margin:18px 0 30px}
+.pie a{color:var(--teal-d)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <img class="logo" src="logo.jpg" alt="Agua Inmaculada">
+  <p class="sub">Real del Valle · Pedido a domicilio</p>
+
+  <div id="hecho" class="card hidden"></div>
+
+  <div id="form">
+    <div class="card">
+      <h2>1. Tu teléfono</h2>
+      <div class="field" style="margin:0"><input type="tel" id="tel" inputmode="tel" placeholder="10 dígitos, ej. 33 1234 5678" autocomplete="tel"></div>
+    </div>
+
+    <div class="card">
+      <h2>2. ¿Cuántos garrafones y de qué marca?</h2>
+      <div id="marcas"></div>
+      <div class="total"><span id="tq">0 garrafones</span><span id="tt"></span></div>
+    </div>
+
+    <div class="card">
+      <h2>3. ¿Cómo vas a pagar?</h2>
+      <div class="pay" id="pago"><button data-fp="efectivo" class="on">Efectivo</button><button data-fp="transferencia">Transferencia</button></div>
+    </div>
+
+    <div class="card hidden" id="nuevo">
+      <h2>Es tu primer pedido en línea</h2>
+      <p class="mut" style="margin-top:-6px">Déjanos tus datos una sola vez.</p>
+      <div class="field"><label for="nom">Nombre</label><input type="text" id="nom" autocomplete="name"></div>
+      <div class="field" style="margin:0"><label for="dom">Domicilio</label><input type="text" id="dom" placeholder="Coto, calle, número exterior e interior"></div>
+    </div>
+
+    <div class="card">
+      <h2>¿Algún comentario? <span class="mut" style="font-weight:600;font-size:15px">(opcional)</span></h2>
+      <textarea id="com" rows="2" maxlength="500" placeholder="ej. Dejar con el guardia, toca el timbre"></textarea>
+    </div>
+
+    <div id="msg"></div>
+    <button class="btn" id="enviar">Enviar pedido</button>
+  </div>
+
+  <p class="pie">¿Dudas, quejas o servicio para tu empresa? <a href="https://wa.me/523330334510" id="wa">Escríbenos por WhatsApp</a></p>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+<script>
+const sb = supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_KEY, { auth: { persistSession: false } });
+const MARCAS = ['Ciel', 'Epura', 'Bluerock', 'Bonafont', 'Rositas'];
+const q = Object.fromEntries(MARCAS.map(m => [m, 0]));
+let precio = 0, fp = 'efectivo', pideDom = false;
+const $ = id => document.getElementById(id);
+const money = v => '$' + Number(v || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const guardar = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
+const leer = k => { try { return localStorage.getItem(k) || ''; } catch { return ''; } };
+
+$('marcas').innerHTML = MARCAS.map(m => `<div class="linea"><span class="n">${m}</span><button class="qb" data-m="${m}" data-d="-1" aria-label="Quitar ${m}">−</button><span class="q" id="q-${m}">0</span><button class="qb" data-m="${m}" data-d="1" aria-label="Agregar ${m}">+</button></div>`).join('');
+const pinta = () => {
+  MARCAS.forEach(m => $('q-' + m).textContent = q[m]);
+  const t = MARCAS.reduce((x, m) => x + q[m], 0);
+  $('tq').textContent = `${t} ${t === 1 ? 'garrafón' : 'garrafones'}`;
+  $('tt').textContent = precio ? money(t * precio) : '';
+};
+document.querySelectorAll('.qb').forEach(b => b.onclick = () => { const m = b.dataset.m; q[m] = Math.max(0, Math.min(20, q[m] + Number(b.dataset.d))); pinta(); });
+document.querySelectorAll('#pago button').forEach(b => b.onclick = () => { fp = b.dataset.fp; document.querySelectorAll('#pago button').forEach(x => x.classList.toggle('on', x === b)); });
+
+// recordar teléfono y último pedido en este celular
+$('tel').value = leer('ai_tel');
+try { const u = JSON.parse(leer('ai_ult') || '{}'); MARCAS.forEach(m => { if (u[m]) q[m] = Math.min(20, Number(u[m]) || 0); }); } catch {}
+const f = leer('ai_fp'); if (f) document.querySelector(`#pago [data-fp="${f}"]`)?.click();
+sb.rpc('precio_pedido_en_linea').then(({ data }) => { precio = Number(data) || 0; pinta(); });
+pinta();
+
+const aviso = (t, c = 'bad') => $('msg').innerHTML = `<div class="alert ${c}">${t}</div>`;
+$('enviar').onclick = async () => {
+  const tel = $('tel').value.replace(/\D/g, '').slice(-10);
+  const tot = MARCAS.reduce((x, m) => x + q[m], 0);
+  if (tel.length !== 10) return aviso('Escribe tu teléfono a 10 dígitos.');
+  if (!tot) return aviso('Elige al menos un garrafón.');
+  if (pideDom && !$('dom').value.trim()) return aviso('Escribe tu domicilio para llevarte tu pedido.');
+  const b = $('enviar'); b.disabled = true; b.textContent = 'Enviando…'; $('msg').innerHTML = '';
+  const marcas = Object.fromEntries(MARCAS.filter(m => q[m] > 0).map(m => [m, q[m]]));
+  try {
+    const { data: r, error } = await sb.rpc('pedido_en_linea', { p_telefono: tel, p_marcas: marcas, p_forma_pago: fp,
+      p_comentario: $('com').value.trim() || null, p_nombre: $('nom').value.trim() || null, p_domicilio: pideDom ? $('dom').value.trim() : null });
+    if (error) throw error;
+    if (!r.ok) {
+      if (r.motivo === 'domicilio') { pideDom = true; $('nuevo').classList.remove('hidden'); $('nom').focus(); return aviso('No encontramos tu número. Déjanos tu nombre y domicilio para tu primer pedido.', 'inf'); }
+      if (r.motivo === 'pendiente') return aviso('Ya tienes un pedido en camino. Si necesitas cambiarlo, escríbenos por WhatsApp.', 'inf');
+      if (r.motivo === 'saturado') return aviso('En este momento hay muchos pedidos. Intenta en unos minutos o escríbenos por WhatsApp.');
+      if (r.motivo === 'telefono') return aviso('Revisa tu teléfono: deben ser 10 dígitos.');
+      if (r.motivo === 'cantidad') return aviso('Puedes pedir de 1 a 20 garrafones en línea. Para más, escríbenos por WhatsApp.');
+      return aviso('Por ahora no podemos recibir pedidos en línea. Escríbenos por WhatsApp.');
+    }
+    guardar('ai_tel', tel); guardar('ai_ult', JSON.stringify(marcas)); guardar('ai_fp', fp);
+    try { sb.functions.invoke('aviso-pedido', { body: { id: r.id } }).catch(() => {}); } catch {}
+    $('form').classList.add('hidden');
+    $('hecho').classList.remove('hidden');
+    $('hecho').innerHTML = `<h2>¡Listo! Recibimos tu pedido</h2>
+      <p style="font-size:18px"><b>${Object.entries(marcas).map(([m, n]) => n + ' ' + m).join(' · ')}</b>${r.total ? ' · ' + money(r.total) : ''}</p>
+      <p class="mut">${r.nuevo ? 'Como es tu primer pedido, te podemos marcar para confirmar tu domicilio.' : 'Va en camino a tu domicilio registrado.'} Pago: ${fp === 'efectivo' ? 'en efectivo al recibir' : 'por transferencia'}.</p>
+      <button class="btn" onclick="location.reload()" style="margin-top:8px">Hacer otro pedido después</button>`;
+    window.scrollTo(0, 0);
+  } catch (e) {
+    aviso('No se pudo enviar. Revisa tu conexión e intenta de nuevo.');
+  } finally { b.disabled = false; b.textContent = 'Enviar pedido'; }
+};
+</script>
+</body>
+</html>
