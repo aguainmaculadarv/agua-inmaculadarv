@@ -362,32 +362,83 @@ const VISTAS_PLANTA = {
 
   /* ---------- PIPA ---------- */
   async pipa(main) {
-    const { data: pipas } = await sb.from('pipas').select('*').order('fecha', { ascending: false }).limit(10);
+    const [{ data: pipas }, deuda] = await Promise.all([
+      sb.from('pipas').select('*').order('fecha', { ascending: false }).limit(10),
+      sb.rpc('pipas_por_pagar')]);
+    const dueno = S.perfil.rol === 'dueno';
+    const porPagar = deuda.error ? null : (deuda.data || []);
     main.innerHTML = `
     <div class="grid g2">
       <div class="card">
         <h2>Registrar entrada de pipa</h2>
         <div class="field"><label>Litros</label><input type="number" id="pp-l" inputmode="numeric" value="${cfg('litros_pipa') || 10000}"></div>
         <div class="field"><label>Costo (pesos)</label><input type="number" id="pp-c" inputmode="decimal" value="${cfg('costo_pipa') || 1700}"></div>
+        <div class="field"><label>¿Cómo se paga?</label><select id="pp-pg">
+          <option value="">Elige una opción…</option>
+          <option value="caja">Pagada ahora con dinero del cajón</option>
+          <option value="sobre">Pagada ahora del sobre / por el dueño</option>
+          <option value="credito">A crédito (se paga después)</option></select>
+          <span class="mut small">Solo lo que sale del cajón se descuenta en el corte del turno.</span></div>
         <div class="field"><label>Proveedor</label><input type="text" id="pp-pr"></div>
         ${fotoInput('pp-f', 'Foto de la nota (opcional)')}
         <div class="field"><label>Notas</label><input type="text" id="pp-n"></div>
         <button class="btn big" id="pp-b">Guardar pipa</button>
       </div>
-      <div class="card"><h2>Últimas pipas</h2>
-        <table><thead><tr><th>Fecha</th><th class="n">Litros</th><th class="n">Costo</th></tr></thead><tbody>
-        ${(pipas || []).map(p => `<tr><td>${fmtFecha(p.fecha)}</td><td class="n">${fmtN(p.litros)}</td><td class="n">${money(p.costo)}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">Sin registros</td></tr>'}
-        </tbody></table></div>
+      <div>
+        <div class="card"><h2>Pipas por pagar</h2>
+          ${porPagar === null ? '<div class="alert warn">Falta activar el control de crédito en la base de datos.</div>'
+          : porPagar.length ? `<table><thead><tr><th>Fecha</th><th class="n">Costo</th><th class="n">Debe</th><th></th></tr></thead><tbody>
+            ${porPagar.map(p => `<tr><td>${fmtFecha(p.fecha)}${p.proveedor ? `<br><span class="mut small">${esc(p.proveedor)}</span>` : ''}</td><td class="n">${money(p.costo)}</td><td class="n"><b>${money(p.saldo)}</b></td>
+              <td><button class="btn sm pp-ab" data-id="${p.id}">Abonar</button></td></tr>`).join('')}</tbody></table>
+            <p class="mut small">Total por pagar: <b>${money(porPagar.reduce((x, p) => x + num(p.saldo), 0))}</b></p>`
+          : '<div class="empty">No se debe ninguna pipa</div>'}
+        </div>
+        <div class="card" style="margin-top:16px"><h2>Últimas pipas</h2>
+          <table><thead><tr><th>Fecha</th><th class="n">Litros</th><th class="n">Costo</th>${dueno ? '<th></th>' : ''}</tr></thead><tbody>
+          ${(pipas || []).map(p => `<tr><td>${fmtFecha(p.fecha)}${p.credito ? ' <span class="tag inf">Crédito</span>' : ''}</td><td class="n">${fmtN(p.litros)}</td><td class="n">${money(p.costo)}</td>
+            ${dueno ? `<td>${p.credito || porPagar === null ? '' : `<button class="btn sm ghost pp-cr" data-id="${p.id}">Pasar a crédito</button>`}</td>` : ''}</tr>`).join('') || '<tr><td colspan="4" class="empty">Sin registros</td></tr>'}
+          </tbody></table></div>
+      </div>
     </div>`;
+    const reload = () => VISTAS_PLANTA.pipa(main);
     document.getElementById('pp-b').onclick = e => busy(e.currentTarget, async () => {
-      const l = nval('pp-l'), c = nval('pp-c');
+      const l = nval('pp-l'), c = nval('pp-c'), pg = val('pp-pg');
       if (!l || l <= 0) throw new Error('Escribe los litros');
       if (c === null) throw new Error('Escribe el costo');
+      if (!pg) throw new Error('Elige cómo se paga la pipa');
       const foto = await subirFoto('pp-f', 'pipas');
-      const { error } = await sb.from('pipas').insert({ litros: l, costo: c, proveedor: val('pp-pr') || null, turno_id: S.turno.id, foto, notas: val('pp-n') || null, usuario_id: S.session.user.id });
+      const { data: np, error } = await sb.from('pipas').insert({ litros: l, costo: c, proveedor: val('pp-pr') || null, turno_id: S.turno.id, foto, notas: val('pp-n') || null,
+        usuario_id: S.session.user.id, credito: pg === 'credito' }).select('id').single();
       if (error) throw error;
-      toast('Pipa registrada', 'ok'); VISTAS_PLANTA.pipa(main);
+      if (pg !== 'credito' && c > 0) {
+        const { error: e2 } = await sb.rpc('abonar_pipa', { p_pipa_id: np.id, p_monto: c, p_origen: pg, p_turno_id: S.turno.id, p_notas: 'Pago completo al recibir' });
+        if (e2) throw e2;
+      }
+      toast(pg === 'credito' ? 'Pipa registrada a crédito' : 'Pipa registrada y pagada', 'ok'); reload();
     });
+    main.querySelectorAll('.pp-ab').forEach(b => b.onclick = () => {
+      const p = porPagar.find(x => x.id == b.dataset.id);
+      modal(`<h2>Abonar a la pipa del ${fmtFecha(p.fecha)}</h2>
+        <p class="mut">Costo ${money(p.costo)} · ya pagado ${money(p.pagado)} · <b>debe ${money(p.saldo)}</b></p>
+        <div class="field"><label>Monto del abono</label><input type="number" id="ab-m" inputmode="decimal" value="${num(p.saldo)}"></div>
+        <div class="field"><label>¿De dónde sale el dinero?</label><select id="ab-o"><option value="">Elige…</option>
+          <option value="caja">Del cajón de este turno (se descuenta en el corte)</option>
+          <option value="sobre">Del sobre / lo pagó el dueño (no afecta el corte)</option></select></div>
+        <div class="field"><label>Notas</label><input type="text" id="ab-n" placeholder="ej. pagado el 2 de noviembre"></div>
+        <div class="row"><button class="btn ghost" data-close>Cancelar</button><span class="sp"></span><button class="btn" id="ab-b">Guardar abono</button></div>`,
+        (box, close) => box.querySelector('#ab-b').onclick = e => busy(e.currentTarget, async () => {
+          const m = nval('ab-m'), o = val('ab-o');
+          if (!m || m <= 0) throw new Error('Escribe el monto');
+          if (!o) throw new Error('Elige de dónde sale el dinero');
+          const { error } = await sb.rpc('abonar_pipa', { p_pipa_id: p.id, p_monto: m, p_origen: o, p_turno_id: S.turno?.id || null, p_notas: val('ab-n') || null });
+          if (error) throw error; close(); toast('Abono guardado', 'ok'); reload();
+        }));
+    });
+    main.querySelectorAll('.pp-cr').forEach(b => b.onclick = () => busy(b, async () => {
+      if (!(await confirmar('¿Marcar esta pipa como a crédito? Después podrás registrarle abonos.', 'Sí, a crédito'))) return;
+      const { error } = await sb.from('pipas').update({ credito: true }).eq('id', Number(b.dataset.id));
+      if (error) throw error; toast('Pipa pasada a crédito', 'ok'); reload();
+    }));
   },
 
   /* ---------- COMPRAS Y SALIDAS DE CAJA ---------- */
