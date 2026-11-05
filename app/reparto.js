@@ -86,11 +86,11 @@ function vistaAbrirReparto(main) {
 async function resumenCarga() {
   const [{ data: cg }, { data: en }, { data: pe }] = await Promise.all([
     sb.from('cargas').select('garrafones').eq('turno_id', S.turno.id),
-    sb.from('entregas').select('llenos,vacios').eq('turno_id', S.turno.id),
+    sb.from('entregas').select('llenos,vacios,nuevos').eq('turno_id', S.turno.id),
     sb.from('pedidos').select('entregado_cantidad').eq('turno_id', S.turno.id).eq('estado', 'entregado')
   ]);
   const cargados = (cg || []).reduce((s, x) => s + x.garrafones, 0);
-  const entregados = S.turno.tipo === 'camioneta' ? (en || []).reduce((s, x) => s + x.llenos, 0) : (pe || []).reduce((s, x) => s + num(x.entregado_cantidad), 0);
+  const entregados = S.turno.tipo === 'camioneta' ? (en || []).reduce((s, x) => s + x.llenos + num(x.nuevos), 0) : (pe || []).reduce((s, x) => s + num(x.entregado_cantidad), 0);
   const vacios = (en || []).reduce((s, x) => s + x.vacios, 0);
   return { cargados, entregados, vacios, quedan: cargados - entregados };
 }
@@ -127,6 +127,8 @@ const VISTAS_REPARTO = {
           <div class="field"><label>Garrafones llenos que entregas</label><input type="number" id="re-l" inputmode="numeric"></div>
           <div class="field"><label>Garrafones vacíos que recoges</label><input type="number" id="re-v" inputmode="numeric" value="0"></div>
         </div>
+        <div class="field"><label>Garrafones nuevos que les vendes (envase con agua)</label><input type="number" id="re-g" inputmode="numeric" value="0">
+          <span class="mut small">Se cobran a ${money(S.productos.find(p => p.nombre === 'Garrafón nuevo')?.precio)} c/u y el envase queda de la empresa.</span></div>
         <div class="field"><label>Nombre de quien recibe</label><input type="text" id="re-r"></div>
         <div id="re-pago"></div>
         ${padFirma('re-f')}
@@ -136,22 +138,22 @@ const VISTAS_REPARTO = {
       </div>
       <div class="card"><h2>Entregas de hoy</h2>
         <table><thead><tr><th>Empresa</th><th class="n">Llenos</th><th class="n">Vacíos</th></tr></thead><tbody>
-        ${(hoy || []).map(e => `<tr><td><b>${esc(S.clientes.find(c => c.id === e.cliente_id)?.nombre || '')}</b><br><span class="mut small">${fmtHora(e.fecha)} · recibió ${esc(e.recibio || '')}</span></td><td class="n">${e.llenos}</td><td class="n">${e.vacios}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">Aún no hay entregas</td></tr>'}
+        ${(hoy || []).map(e => `<tr><td><b>${esc(S.clientes.find(c => c.id === e.cliente_id)?.nombre || '')}</b><br><span class="mut small">${fmtHora(e.fecha)} · recibió ${esc(e.recibio || '')}</span></td><td class="n">${e.llenos}${num(e.nuevos) ? `<br><span class="mut small">+${e.nuevos} nuevos</span>` : ''}</td><td class="n">${e.vacios}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">Aún no hay entregas</td></tr>'}
         </tbody></table></div>
     </div>`;
     const firma = activarFirma('re-f');
     let fpEnt = null;
     const pintarPago = c => {
       const box = document.getElementById('re-pago');
-      if (!c || c.dias_credito !== 0) { fpEnt = null; document.getElementById('re-l').oninput = null; box.innerHTML = c ? `<div class="alert inf">${esc(txtCredito(c))}: no cobras, queda por cobrar.</div>` : ''; return; }
+      if (!c || c.dias_credito !== 0) { fpEnt = null; document.getElementById('re-l').oninput = null; document.getElementById('re-g').oninput = null; box.innerHTML = c ? `<div class="alert inf">${esc(txtCredito(c))}: no cobras, queda por cobrar.</div>` : ''; return; }
       fpEnt = c.forma_pago_habitual || 'efectivo';
       const pinta = () => {
-        const l = nval('re-l') ?? 0, pr = num(c.precio_especial ?? S.productos.find(p => p.nombre === 'Relleno garrafón')?.precio);
+        const l = nval('re-l') ?? 0, g = nval('re-g') ?? 0, pr = num(c.precio_especial ?? S.productos.find(p => p.nombre === 'Relleno garrafón')?.precio), pg = num(S.productos.find(p => p.nombre === 'Garrafón nuevo')?.precio);
         box.innerHTML = `<div class="field"><label>Contado · ¿cómo te pagó?</label><div class="pay"><button data-fp="efectivo" class="${fpEnt === 'efectivo' ? 'on' : ''}">Efectivo</button><button data-fp="transferencia" class="${fpEnt === 'transferencia' ? 'on' : ''}">Transferencia</button></div></div>
-          <div class="total"><span>Cobrar</span><span>${money(l * pr)}</span></div>`;
+          <div class="total"><span>Cobrar</span><span>${money(l * pr + g * pg)}</span></div>`;
         box.querySelectorAll('[data-fp]').forEach(b => b.onclick = () => { fpEnt = b.dataset.fp; pinta(); });
       };
-      pinta(); document.getElementById('re-l').oninput = pinta;
+      pinta(); document.getElementById('re-l').oninput = pinta; document.getElementById('re-g').oninput = pinta;
     };
     const elegir = id => {
       const sel = document.getElementById('re-c'); sel.value = id; sel.onchange({ target: sel });
@@ -167,13 +169,13 @@ const VISTAS_REPARTO = {
     };
     document.getElementById('re-b').onclick = e => busy(e.currentTarget, async () => {
       const cli = val('re-c'); if (!cli) throw new Error('Elige la empresa');
-      const l = nval('re-l') ?? 0, v = nval('re-v') ?? 0;
-      if (l <= 0 && v <= 0) throw new Error('Escribe cuántos garrafones entregas o recoges');
-      if (l > r.quedan && !(await confirmar(`Según tu carga solo te quedan ${r.quedan} llenos. ¿Guardar de todos modos?`, 'Guardar'))) return;
+      const l = nval('re-l') ?? 0, v = nval('re-v') ?? 0, g = nval('re-g') ?? 0;
+      if (l <= 0 && v <= 0 && g <= 0) throw new Error('Escribe cuántos garrafones entregas o recoges');
+      if (l + g > r.quedan && !(await confirmar(`Según tu carga solo te quedan ${r.quedan} llenos. ¿Guardar de todos modos?`, 'Guardar'))) return;
       if (!val('re-r')) throw new Error('Escribe el nombre de quien recibe');
       if (firma.vacia()) throw new Error('Falta la firma de recibido');
       const f = await firma.subir('entregas');
-      const { error } = await sb.rpc('registrar_entrega_empresa', { p_turno_id: S.turno.id, p_cliente_id: Number(cli), p_llenos: l, p_vacios: v, p_recibio: val('re-r'), p_firma: f, p_notas: val('re-n') || null, p_forma_pago: fpEnt });
+      const { error } = await sb.rpc('registrar_entrega_empresa', { p_turno_id: S.turno.id, p_cliente_id: Number(cli), p_llenos: l, p_vacios: v, p_recibio: val('re-r'), p_firma: f, p_notas: val('re-n') || null, p_forma_pago: fpEnt, p_nuevos: g });
       if (error) throw error;
       toast('Entrega guardada', 'ok'); VISTAS_REPARTO.r_entregar(main);
     });
@@ -505,12 +507,12 @@ VISTAS_DUENO.reparto = async function (main) {
   const cli = id => S.clientes.find(c => c.id === id);
   const nom = id => esc(S.perfiles.find(p => p.id === id)?.nombre || '—');
   const porEmp = {};
-  (en || []).forEach(e => { const k = e.cliente_id; porEmp[k] = porEmp[k] || { llenos: 0, vacios: 0, n: 0 }; porEmp[k].llenos += e.llenos; porEmp[k].vacios += e.vacios; porEmp[k].n++; });
+  (en || []).forEach(e => { const k = e.cliente_id; porEmp[k] = porEmp[k] || { llenos: 0, vacios: 0, n: 0, nuevos: 0 }; porEmp[k].llenos += e.llenos; porEmp[k].nuevos += num(e.nuevos); porEmp[k].vacios += e.vacios; porEmp[k].n++; });
   const peEnt = (pe || []).filter(p => p.estado === 'entregado');
   main.innerHTML = per.html + `
   <div class="grid g4" style="margin-bottom:16px">
-    <div class="kpi"><div class="l">Garrafones a empresas</div><div class="v">${fmtN((en || []).reduce((s, e) => s + e.llenos, 0))}</div><div class="s">${(en || []).length} entregas</div></div>
-    <div class="kpi"><div class="l">Vendido a empresas</div><div class="v">${money0(Object.entries(porEmp).reduce((s, [k, v]) => s + v.llenos * num(cli(Number(k))?.precio_especial), 0))}</div></div>
+    <div class="kpi"><div class="l">Garrafones a empresas</div><div class="v">${fmtN((en || []).reduce((s, e) => s + e.llenos, 0))}</div><div class="s">${(en || []).length} entregas · ${fmtN((en || []).reduce((s, e) => s + num(e.nuevos), 0))} garrafones nuevos</div></div>
+    <div class="kpi"><div class="l">Vendido a empresas</div><div class="v">${money0(Object.entries(porEmp).reduce((s, [k, v]) => s + v.llenos * num(cli(Number(k))?.precio_especial) + v.nuevos * num(S.productos.find(p => p.nombre === 'Garrafón nuevo')?.precio), 0))}</div></div>
     <div class="kpi"><div class="l">Pedidos a domicilio</div><div class="v">${peEnt.length} / ${(pe || []).length}</div><div class="s">entregados / recibidos</div></div>
     <div class="kpi"><div class="l">Garrafones a domicilio</div><div class="v">${fmtN(peEnt.reduce((s, p) => s + num(p.entregado_cantidad), 0))}</div></div>
   </div>
