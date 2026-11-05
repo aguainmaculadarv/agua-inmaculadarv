@@ -106,9 +106,20 @@ const VISTAS_REPARTO = {
     const empresas = S.clientes.filter(c => c.tipo === 'empresa' || c.tipo === 'restaurante').sort((a, b) => (a.zona || 'Z').localeCompare(b.zona || 'Z') || a.nombre.localeCompare(b.nombre));
     const r = await resumenCarga();
     const { data: hoy } = await sb.from('entregas').select('*').eq('turno_id', S.turno.id).order('fecha', { ascending: false });
+    const dia = diaHoy(), hechos = new Set((hoy || []).map(e => e.cliente_id));
+    const ruta = empresas.filter(c => (c.dias_entrega || []).includes(dia));
+    const nomDia = DIAS_SEM.find(d => d[0] === dia)?.[1] || '';
     main.innerHTML = barraCarga(r) + `
+    <div class="card" style="margin-bottom:16px"><div class="row"><h2 style="margin:0">Ruta de hoy · ${esc(nomDia)}</h2><span class="sp"></span><span class="tag inf">${ruta.filter(c => hechos.has(c.id)).length} de ${ruta.length} entregadas</span></div>
+      ${ruta.length ? `<div class="tw"><table><tbody>${ruta.map(c => `<tr><td>${hechos.has(c.id) ? '<span class="tag ok">Entregado</span> ' : ''}<b>${esc(c.nombre)}</b>${c.zona ? ` <span class="mut small">Zona ${esc(c.zona)}</span>` : ''}
+          <br><span class="mut small">Recibe: ${esc(c.quien_recibe || '—')} · ${esc(txtCredito(c))}${c.notas ? ' · ' + esc(c.notas) : ''}</span></td>
+        <td style="white-space:nowrap"><a class="btn sm sec" href="${esc(linkMaps(c.domicilio || c.nombre, c.maps_url))}" target="_blank" rel="noopener">Maps</a>
+          ${c.telefono ? `<a class="btn sm ghost" href="tel:${esc(c.telefono)}">Llamar</a>` : ''}
+          ${hechos.has(c.id) ? '' : `<button class="btn sm ru-ent" data-id="${c.id}">Entregar</button>`}</td></tr>`).join('')}</tbody></table></div>`
+        : '<div class="empty">Hoy no hay empresas programadas. Puedes elegir cualquier empresa abajo.</div>'}
+    </div>
     <div class="grid g2">
-      <div class="card">
+      <div class="card" id="re-card">
         <h2>Entrega a empresa</h2>
         <div class="field"><label>Empresa</label><select id="re-c"><option value="">— Elige la empresa —</option>${empresas.map(c => `<option value="${c.id}">${c.zona ? 'Zona ' + esc(c.zona) + ' · ' : ''}${esc(c.nombre)}</option>`).join('')}</select></div>
         <div id="re-info" class="mut small" style="margin:-6px 0 12px"></div>
@@ -117,10 +128,11 @@ const VISTAS_REPARTO = {
           <div class="field"><label>Garrafones vacíos que recoges</label><input type="number" id="re-v" inputmode="numeric" value="0"></div>
         </div>
         <div class="field"><label>Nombre de quien recibe</label><input type="text" id="re-r"></div>
+        <div id="re-pago"></div>
         ${padFirma('re-f')}
         <div class="field"><label>Notas</label><input type="text" id="re-n"></div>
         <button class="btn big" id="re-b">Guardar entrega</button>
-        <p class="mut small">La entrega queda a crédito de la empresa; se factura a principio de mes.</p>
+        <p class="mut small">Si la empresa es de crédito, la entrega queda por cobrar. Si es de contado, cobra al entregar.</p>
       </div>
       <div class="card"><h2>Entregas de hoy</h2>
         <table><thead><tr><th>Empresa</th><th class="n">Llenos</th><th class="n">Vacíos</th></tr></thead><tbody>
@@ -128,9 +140,30 @@ const VISTAS_REPARTO = {
         </tbody></table></div>
     </div>`;
     const firma = activarFirma('re-f');
+    let fpEnt = null;
+    const pintarPago = c => {
+      const box = document.getElementById('re-pago');
+      if (!c || c.dias_credito !== 0) { fpEnt = null; document.getElementById('re-l').oninput = null; box.innerHTML = c ? `<div class="alert inf">${esc(txtCredito(c))}: no cobras, queda por cobrar.</div>` : ''; return; }
+      fpEnt = c.forma_pago_habitual || 'efectivo';
+      const pinta = () => {
+        const l = nval('re-l') ?? 0, pr = num(c.precio_especial ?? S.productos.find(p => p.nombre === 'Relleno garrafón')?.precio);
+        box.innerHTML = `<div class="field"><label>Contado · ¿cómo te pagó?</label><div class="pay"><button data-fp="efectivo" class="${fpEnt === 'efectivo' ? 'on' : ''}">Efectivo</button><button data-fp="transferencia" class="${fpEnt === 'transferencia' ? 'on' : ''}">Transferencia</button></div></div>
+          <div class="total"><span>Cobrar</span><span>${money(l * pr)}</span></div>`;
+        box.querySelectorAll('[data-fp]').forEach(b => b.onclick = () => { fpEnt = b.dataset.fp; pinta(); });
+      };
+      pinta(); document.getElementById('re-l').oninput = pinta;
+    };
+    const elegir = id => {
+      const sel = document.getElementById('re-c'); sel.value = id; sel.onchange({ target: sel });
+      const c = S.clientes.find(x => x.id == id);
+      if (c?.quien_recibe && !val('re-r') && c.quien_recibe.toLowerCase() !== 'encargado') document.getElementById('re-r').value = c.quien_recibe;
+      document.getElementById('re-card').scrollIntoView({ behavior: 'smooth' }); document.getElementById('re-l').focus();
+    };
+    main.querySelectorAll('.ru-ent').forEach(b => b.onclick = () => elegir(b.dataset.id));
     document.getElementById('re-c').onchange = e => {
       const c = S.clientes.find(x => x.id == e.target.value);
-      document.getElementById('re-info').innerHTML = c ? `Precio: <b>${money(c.precio_especial ?? S.productos.find(p => p.nombre === 'Relleno garrafón')?.precio)}</b> por garrafón · Tiene <b>${fmtN(c.garrafones_prestados)}</b> garrafones nuestros${c.domicilio ? ` · <a href="${esc(linkMaps(c.domicilio, c.maps_url))}" target="_blank" rel="noopener">Ver en Maps</a>` : ''}` : '';
+      pintarPago(c);
+      document.getElementById('re-info').innerHTML = c ? `Precio: <b>${money(c.precio_especial ?? S.productos.find(p => p.nombre === 'Relleno garrafón')?.precio)}</b> por garrafón · Tiene <b>${fmtN(c.garrafones_prestados)}</b> garrafones nuestros${c.domicilio || c.maps_url ? ` · <a href="${esc(linkMaps(c.domicilio || c.nombre, c.maps_url))}" target="_blank" rel="noopener">Ver en Maps</a>` : ''}` : '';
     };
     document.getElementById('re-b').onclick = e => busy(e.currentTarget, async () => {
       const cli = val('re-c'); if (!cli) throw new Error('Elige la empresa');
@@ -140,7 +173,7 @@ const VISTAS_REPARTO = {
       if (!val('re-r')) throw new Error('Escribe el nombre de quien recibe');
       if (firma.vacia()) throw new Error('Falta la firma de recibido');
       const f = await firma.subir('entregas');
-      const { error } = await sb.rpc('registrar_entrega_empresa', { p_turno_id: S.turno.id, p_cliente_id: Number(cli), p_llenos: l, p_vacios: v, p_recibio: val('re-r'), p_firma: f, p_notas: val('re-n') || null });
+      const { error } = await sb.rpc('registrar_entrega_empresa', { p_turno_id: S.turno.id, p_cliente_id: Number(cli), p_llenos: l, p_vacios: v, p_recibio: val('re-r'), p_firma: f, p_notas: val('re-n') || null, p_forma_pago: fpEnt });
       if (error) throw error;
       toast('Entrega guardada', 'ok'); VISTAS_REPARTO.r_entregar(main);
     });
@@ -225,14 +258,15 @@ const VISTAS_REPARTO = {
     main.innerHTML = barraCarga(r) + `<div class="card" style="max-width:600px;margin:0 auto">
       <h1>Cerrar turno</h1>
       <div class="field"><label>Garrafones llenos que regresas</label><input type="number" id="rz-l" inputmode="numeric"></div>
-      ${cam ? `<div class="field"><label>Garrafones vacíos que traes</label><input type="number" id="rz-v" inputmode="numeric"></div>`
+      ${cam ? `<div class="field"><label>Garrafones vacíos que traes</label><input type="number" id="rz-v" inputmode="numeric"></div>
+               <div class="field"><label>Efectivo que traes de empresas de contado (0 si ninguno)</label><input type="number" id="rz-e" inputmode="decimal" value="0"></div>`
             : `<div class="field"><label>Efectivo total que traes, contando la caja chica</label><input type="number" id="rz-e" inputmode="decimal"></div>`}
       <div class="field"><label>Notas</label><textarea id="rz-n"></textarea></div>
       <button class="btn big bad" id="rz-b">Cerrar turno</button></div>`;
     document.getElementById('rz-b').onclick = e => busy(e.currentTarget, async () => {
       const l = nval('rz-l'); if (l === null) throw new Error('Escribe los llenos que regresas (0 si ninguno)');
       const v = cam ? nval('rz-v') : 0; if (cam && v === null) throw new Error('Escribe los vacíos que traes');
-      const ef = cam ? 0 : nval('rz-e'); if (!cam && ef === null) throw new Error('Escribe el efectivo que traes');
+      const ef = nval('rz-e'); if (ef === null) throw new Error('Escribe el efectivo que traes (0 si ninguno)');
       if (!(await confirmar('¿Cerrar el turno de reparto?', 'Sí, cerrar'))) return;
       const { data: x, error } = await sb.rpc('cerrar_turno_reparto', { p_turno_id: S.turno.id, p_regreso_llenos: l, p_regreso_vacios: v, p_efectivo_contado: ef, p_notas: val('rz-n') || null });
       if (error) throw error;
@@ -252,7 +286,12 @@ function arqueoReparto(main, x) {
       <tr><td>Llenos que regresan</td><td class="n">${fmtN(x.regreso_llenos)}</td></tr></tbody></table>
     ${al(x.diferencia_llenos === 0, `Diferencia de llenos: ${x.diferencia_llenos > 0 ? '+' : ''}${x.diferencia_llenos}${x.diferencia_llenos === 0 ? ' · Cuadra' : x.diferencia_llenos < 0 ? ' · Faltan garrafones' : ' · Sobran garrafones'}`)}
     ${x.tipo === 'camioneta' ? `<table><tbody><tr><td>Vacíos recogidos en empresas</td><td class="n">${fmtN(x.vacios_recogidos)}</td></tr><tr><td>Vacíos que trae</td><td class="n">${fmtN(x.regreso_vacios)}</td></tr></tbody></table>
-      ${al(x.diferencia_vacios === 0, `Diferencia de vacíos: ${x.diferencia_vacios}${x.diferencia_vacios === 0 ? ' · Cuadra' : ''}`)}` : `
+      ${al(x.diferencia_vacios === 0, `Diferencia de vacíos: ${x.diferencia_vacios}${x.diferencia_vacios === 0 ? ' · Cuadra' : ''}`)}
+      <h3>Cobros de contado</h3><table><tbody>
+        <tr><td>Cobrado en efectivo</td><td class="n">${money(x.cobrado_efectivo)}</td></tr>
+        <tr><td>Cobrado por transferencia</td><td class="n">${money(x.cobrado_transferencia)}</td></tr>
+        <tr><td><b>Efectivo que trae</b></td><td class="n"><b>${money(x.efectivo_contado)}</b></td></tr></tbody></table>
+      ${al(Math.abs(num(x.diferencia_caja)) <= tc, `Diferencia de efectivo: ${money(x.diferencia_caja)}${num(x.diferencia_caja) === 0 ? ' · Cuadra' : num(x.diferencia_caja) < 0 ? ' · Falta dinero' : ' · Sobra dinero'}`)}` : `
     <h3>Dinero</h3><table><tbody>
       <tr><td>Caja chica inicial</td><td class="n">${money(x.caja_inicial)}</td></tr>
       <tr><td>Cobrado en efectivo</td><td class="n">${money(x.cobrado_efectivo)}</td></tr>
@@ -471,7 +510,7 @@ VISTAS_DUENO.reparto = async function (main) {
   main.innerHTML = per.html + `
   <div class="grid g4" style="margin-bottom:16px">
     <div class="kpi"><div class="l">Garrafones a empresas</div><div class="v">${fmtN((en || []).reduce((s, e) => s + e.llenos, 0))}</div><div class="s">${(en || []).length} entregas</div></div>
-    <div class="kpi"><div class="l">Vendido a crédito</div><div class="v">${money0(Object.entries(porEmp).reduce((s, [k, v]) => s + v.llenos * num(cli(Number(k))?.precio_especial), 0))}</div></div>
+    <div class="kpi"><div class="l">Vendido a empresas</div><div class="v">${money0(Object.entries(porEmp).reduce((s, [k, v]) => s + v.llenos * num(cli(Number(k))?.precio_especial), 0))}</div></div>
     <div class="kpi"><div class="l">Pedidos a domicilio</div><div class="v">${peEnt.length} / ${(pe || []).length}</div><div class="s">entregados / recibidos</div></div>
     <div class="kpi"><div class="l">Garrafones a domicilio</div><div class="v">${fmtN(peEnt.reduce((s, p) => s + num(p.entregado_cantidad), 0))}</div></div>
   </div>

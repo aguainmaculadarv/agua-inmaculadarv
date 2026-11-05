@@ -162,7 +162,7 @@ async function salir() { await sb.auth.signOut(); S.turno = null; S.tab = null; 
 
 /* ---------------- estructura general ---------------- */
 const TABS_PLANTA = [['vender','Vender'],['pedidos','Pedidos'],['prestamos','Préstamos'],['pipa','Pipa'],['compra','Compras y caja'],['bitacora','Bitácora'],['cerrar','Cerrar turno']];
-const TABS_DUENO = [['resumen','Resumen'],['pedidosD','Pedidos'],['reparto','Reparto'],['prestamosD','Préstamos'],['turnos','Turnos'],['ventas','Ventas'],['inventario','Inventario'],['productos','Productos'],
+const TABS_DUENO = [['resumen','Resumen'],['pedidosD','Pedidos'],['reparto','Reparto'],['prestamosD','Préstamos'],['turnos','Turnos'],['ventas','Ventas'],['cobrar','Por cobrar'],['inventario','Inventario'],['productos','Productos'],
   ['clientes','Clientes'],['contador','Contador'],['fijos','Gastos fijos'],['mant','Mantenimiento'],['bitacoraD','Bitácora'],
   ['usuarios','Usuarios'],['ajustes','Ajustes'],['planta','Operar planta']];
 
@@ -725,6 +725,54 @@ const VISTAS_DUENO = {
     });
   },
 
+  /* ---------- POR COBRAR (empresas a crédito) ---------- */
+  async cobrar(main) {
+    main.innerHTML = '<div class="empty">Calculando…</div>';
+    const { data, error } = await sb.rpc('cuentas_por_cobrar');
+    if (error) throw error;
+    const tot = data.reduce((x, c) => x + num(c.saldo), 0), ven = data.reduce((x, c) => x + num(c.vencido), 0);
+    main.innerHTML = `<div class="grid g3" style="margin-bottom:16px">
+      <div class="kpi"><div class="l">Te deben</div><div class="v">${money0(tot)}</div><div class="s">${data.length} clientes</div></div>
+      <div class="kpi"><div class="l">Vencido</div><div class="v" style="color:${ven > 0 ? 'var(--bad)' : 'var(--ok)'}">${money0(ven)}</div><div class="s">${data.filter(c => num(c.vencido) > 0).length} clientes</div></div>
+      <div class="kpi"><div class="l">Por vencer</div><div class="v">${money0(tot - ven)}</div></div></div>
+    <div class="card"><h2>Cuentas por cobrar</h2><div class="tw"><table><thead><tr><th>Cliente</th><th>Crédito</th><th class="n">Debe</th><th class="n">Vencido</th><th></th></tr></thead><tbody>
+      ${data.map(c => `<tr><td><b>${esc(c.nombre)}</b><br><span class="mut small">${esc(c.contacto || '')}${c.telefono ? ` · <a href="tel:${esc(c.telefono)}">${esc(c.telefono)}</a> · <a href="https://wa.me/52${esc(String(c.telefono).replace(/\D/g, '').slice(-10))}" target="_blank" rel="noopener">WhatsApp</a>` : ''}</span></td>
+        <td>${esc(txtCredito(c))}<br><span class="mut small">desde ${fmtFecha(c.pendiente_desde)}</span></td>
+        <td class="n"><b>${money(c.saldo)}</b></td>
+        <td class="n">${num(c.vencido) > 0 ? `<span class="tag bad">${money(c.vencido)}</span><br><span class="mut small">${c.dias_vencido} días</span>` : '<span class="tag ok">Al corriente</span>'}</td>
+        <td><button class="btn sm cb-pago" data-id="${c.cliente_id}">Registrar pago</button> <button class="btn sm ghost cb-ver" data-id="${c.cliente_id}">Ver</button></td></tr>`).join('') || '<tr><td colspan="5" class="empty">Nadie te debe. Todo al corriente.</td></tr>'}
+    </tbody></table></div><p class="mut small">Los pagos se aplican a las entregas más viejas primero.</p></div>`;
+    const reload = () => VISTAS_DUENO.cobrar(main);
+    main.querySelectorAll('.cb-pago').forEach(b => b.onclick = () => {
+      const c = data.find(x => x.cliente_id == b.dataset.id);
+      modal(`<h2>Pago de ${esc(c.nombre)}</h2><p class="mut">Debe <b>${money(c.saldo)}</b>${num(c.vencido) > 0 ? ` · vencido ${money(c.vencido)}` : ''}</p>
+        <div class="field"><label>Monto que pagó</label><input type="number" id="cb-m" inputmode="decimal" value="${num(c.saldo)}"></div>
+        <div class="field"><label>Forma de pago</label><div class="pay" id="cb-fp"><button data-v="transferencia" class="on">Transferencia</button><button data-v="efectivo">Efectivo</button></div></div>
+        <div class="field"><label>Notas</label><input type="text" id="cb-n" placeholder="ej. folio de la transferencia"></div>
+        <div class="row"><button class="btn ghost" data-close>Cancelar</button><span class="sp"></span><button class="btn" id="cb-b">Guardar pago</button></div>`,
+        (box, close) => {
+          let fp = 'transferencia';
+          box.querySelectorAll('#cb-fp button').forEach(x => x.onclick = () => { fp = x.dataset.v; box.querySelectorAll('#cb-fp button').forEach(y => y.classList.toggle('on', y === x)); });
+          box.querySelector('#cb-b').onclick = e => busy(e.currentTarget, async () => {
+            const m = nval('cb-m'); if (!m || m <= 0) throw new Error('Escribe el monto');
+            if (m > num(c.saldo) + 0.01 && !(await confirmar(`El pago (${money(m)}) es mayor a lo que debe (${money(c.saldo)}). ¿Guardar de todos modos?`, 'Guardar'))) return;
+            const { error } = await sb.from('cobros').insert({ cliente_id: c.cliente_id, monto: m, forma_pago: fp, notas: val('cb-n') || null });
+            if (error) throw error; close(); toast('Pago registrado', 'ok'); reload();
+          });
+        });
+    });
+    main.querySelectorAll('.cb-ver').forEach(b => b.onclick = async () => {
+      const c = data.find(x => x.cliente_id == b.dataset.id);
+      const [{ data: vs }, { data: cs }] = await Promise.all([
+        sb.from('ventas').select('id,fecha,total').eq('cliente_id', c.cliente_id).eq('forma_pago', 'credito').eq('cancelada', false).order('fecha', { ascending: false }).limit(40),
+        sb.from('cobros').select('*').eq('cliente_id', c.cliente_id).order('fecha', { ascending: false }).limit(40)]);
+      modal(`<h2>${esc(c.nombre)}</h2><p class="mut">${esc(txtCredito(c))} · debe <b>${money(c.saldo)}</b></p>
+        <h3>Entregas a crédito</h3><table><tbody>${(vs || []).map(v => `<tr><td>${fmtFecha(v.fecha)}</td><td class="n">${money(v.total)}</td></tr>`).join('') || '<tr><td class="empty">Sin entregas</td></tr>'}</tbody></table>
+        <h3>Pagos</h3><table><tbody>${(cs || []).map(p => `<tr><td>${fmtFecha(p.fecha)}<br><span class="mut small">${esc(p.forma_pago)}${p.notas ? ' · ' + esc(p.notas) : ''}</span></td><td class="n">${money(p.monto)}</td></tr>`).join('') || '<tr><td class="empty">Sin pagos</td></tr>'}</tbody></table>
+        <div class="row" style="margin-top:12px"><span class="sp"></span><button class="btn ghost" data-close>Cerrar</button></div>`);
+    });
+  },
+
   /* ---------- VENTAS ---------- */
   async ventas(main) {
     const per = selectorPeriodo(() => VISTAS_DUENO.ventas(main));
@@ -1093,6 +1141,9 @@ function editarArticulo(a, onSave, tipoDef) {
     }));
 }
 
+const DIAS_SEM = [['lun', 'Lun'], ['mar', 'Mar'], ['mie', 'Mié'], ['jue', 'Jue'], ['vie', 'Vie'], ['sab', 'Sáb'], ['dom', 'Dom']];
+const diaHoy = () => ['dom', 'lun', 'mar', 'mie', 'jue', 'vie', 'sab'][new Date(fechaMX() + 'T12:00:00').getDay()];
+const txtCredito = c => c.dias_credito === 0 ? 'Contado' : c.dias_credito ? `Crédito ${c.dias_credito} días` : 'Crédito';
 function editarCliente(c, onSave) {
   const nuevo = !c; c = c || { tipo: 'restaurante', activo: true };
   const f = (id, lab, v, t = 'text') => `<div class="field"><label>${lab}</label><input type="${t}" id="${id}" value="${esc(v ?? '')}"></div>`;
@@ -1104,6 +1155,11 @@ function editarCliente(c, onSave) {
       ${f('ec-pe', 'Precio especial por relleno (autorizado por ti)', c.precio_especial, 'number')}
     </div>
     ${f('ec-dom', 'Domicilio', c.domicilio)}${f('ec-map', 'Liga de Google Maps', c.maps_url)}
+    <h3 style="margin-top:8px">Ruta y crédito</h3>
+    <div class="grid g2">${f('ec-ct', 'Contacto (para cobrar o avisar)', c.contacto)}${f('ec-qr', 'Quién recibe', c.quien_recibe)}
+      <div class="field"><label>Pago</label><select id="ec-dc">${[['', 'Sin definir (queda a crédito)'], ['0', 'Contado (paga al entregar)'], ['7', 'Crédito 7 días'], ['15', 'Crédito 15 días'], ['30', 'Crédito 30 días']].map(([v, t]) => `<option value="${v}" ${String(c.dias_credito ?? '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      <div class="field"><label>Forma de pago habitual</label><select id="ec-fp">${[['', '—'], ['efectivo', 'Efectivo'], ['transferencia', 'Transferencia']].map(([v, t]) => `<option value="${v}" ${(c.forma_pago_habitual || '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div></div>
+    <div class="field"><label>Días de entrega</label><div class="row" style="flex-wrap:wrap;gap:10px">${DIAS_SEM.map(([k, t]) => `<label class="chk" style="margin:0"><input type="checkbox" class="ec-dia" value="${k}" ${(c.dias_entrega || []).includes(k) ? 'checked' : ''}> ${t}</label>`).join('')}</div></div>
     <h3 style="margin-top:8px">Datos fiscales</h3>
     <div class="grid g2">${f('ec-rfc', 'RFC', c.rfc)}${f('ec-rs', 'Razón social', c.razon_social)}${f('ec-rg', 'Régimen fiscal', c.regimen_fiscal)}${f('ec-cp', 'Código postal fiscal', c.cp_fiscal)}${f('ec-uso', 'Uso de CFDI', c.uso_cfdi)}${f('ec-mail', 'Correo para factura', c.correo_factura, 'email')}</div>
     <div class="field"><label>Constancia de situación fiscal (PDF o foto)</label><input type="file" id="ec-cons" accept="application/pdf,image/*">${c.constancia_path ? '<span class="mut small">Ya hay una constancia guardada; subir otra la reemplaza.</span>' : ''}</div>
@@ -1116,7 +1172,9 @@ function editarCliente(c, onSave) {
       if (pe !== null) { const rel = S.productos.find(p => p.nombre === 'Relleno garrafón'); if (rel && pe < costoProducto(rel) && !(await confirmar(`El precio especial ${money(pe)} queda abajo del costo estimado (${money(costoProducto(rel))}). ¿Guardar?`))) return; }
       const row = { nombre: val('ec-n'), tipo: val('ec-t'), telefono: val('ec-tel') || null, precio_especial: pe, domicilio: val('ec-dom') || null, maps_url: val('ec-map') || null,
         rfc: val('ec-rfc').toUpperCase() || null, razon_social: val('ec-rs') || null, regimen_fiscal: val('ec-rg') || null, cp_fiscal: val('ec-cp') || null, uso_cfdi: val('ec-uso') || null,
-        correo_factura: val('ec-mail') || null, notas: val('ec-no') || null, activo: chk('ec-a') };
+        correo_factura: val('ec-mail') || null, notas: val('ec-no') || null, activo: chk('ec-a'),
+        contacto: val('ec-ct') || null, quien_recibe: val('ec-qr') || null, dias_credito: val('ec-dc') === '' ? null : Number(val('ec-dc')),
+        forma_pago_habitual: val('ec-fp') || null, dias_entrega: (() => { const d = [...box.querySelectorAll('.ec-dia:checked')].map(i => i.value); return d.length ? d : null; })() };
       let id = c.id;
       if (nuevo) { const { data, error } = await sb.from('clientes').insert(row).select('id').single(); if (error) throw error; id = data.id; }
       else { const { error } = await sb.from('clientes').update(row).eq('id', id); if (error) throw error; }
