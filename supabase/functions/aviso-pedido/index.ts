@@ -17,7 +17,11 @@ Deno.serve(async (req) => {
   try {
     const { id } = await req.json();
     if (!id) return json({ error: "Falta el id del pedido" }, 400);
-    const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    // Llave de servicio: nombre clásico o el nuevo formato de llaves secretas de Supabase
+    let llave = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+    if (!llave) { try { const k = JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS") || "{}"); llave = k.default || Object.values(k)[0] || ""; } catch { /* sin llave */ } }
+    if (!llave) return json({ error: "Sin llave de servicio en la función" }, 500);
+    const db = createClient(Deno.env.get("SUPABASE_URL")!, llave);
 
     // Solo avisa pedidos reales, pendientes y que no se hayan avisado antes
     const { data: p } = await db.from("pedidos").select("*").eq("id", id).maybeSingle();
