@@ -108,11 +108,11 @@ const pinta = () => {
   $('tt').textContent = precio ? money(t * precio) : '';
 };
 document.querySelectorAll('.qb').forEach(b => b.onclick = () => { const m = b.dataset.m; q[m] = Math.max(0, Math.min(20, q[m] + Number(b.dataset.d))); pinta(); });
-const cajaBanco = () => banco ? `<div class="banco">${banco.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</div><button class="btn sec" type="button" onclick="copiarClabe(this)">Copiar CLABE</button>` : '';
+const cajaBanco = () => banco ? `<div class="banco">${banco.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</div><button class="btn sec" type="button" onclick="copiarClabe(this)">Copiar número</button>` : '';
 window.copiarClabe = async b => {
-  const m = banco.replace(/\s/g, '').match(/\d{18}/); const t = m ? m[0] : banco;
+  const m = banco.replace(/[\s-]/g, '').match(/\d{18}|\d{16}/); const t = m ? m[0] : banco;
   try { await navigator.clipboard.writeText(t); b.textContent = '¡Copiada!'; } catch { b.textContent = 'Mantén presionado el número para copiarlo'; }
-  setTimeout(() => b.textContent = 'Copiar CLABE', 2500);
+  setTimeout(() => b.textContent = 'Copiar número', 2500);
 };
 const pintaBanco = () => { const el = $('banco'); el.innerHTML = cajaBanco(); el.classList.toggle('hidden', !(fp === 'transferencia' && banco)); };
 document.querySelectorAll('#pago button').forEach(b => b.onclick = () => { fp = b.dataset.fp; document.querySelectorAll('#pago button').forEach(x => x.classList.toggle('on', x === b)); pintaBanco(); });
