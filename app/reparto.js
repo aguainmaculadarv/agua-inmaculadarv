@@ -34,6 +34,53 @@ function activarFirma(id) {
 }
 const linkMaps = (dom, url) => url || ('https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent((dom || '') + ', Real del Valle, Tlajomulco, Jalisco'));
 
+
+/* ---------------- avisos de pedidos nuevos ---------------- */
+let _canalPedidos = null, _audio = null;
+function sonarAviso() {
+  try {
+    _audio = _audio || new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.35, 0.7].forEach(t => { const o = _audio.createOscillator(), g = _audio.createGain(); o.frequency.value = 880; o.connect(g); g.connect(_audio.destination);
+      g.gain.setValueAtTime(0.4, _audio.currentTime + t); g.gain.exponentialRampToValueAtTime(0.001, _audio.currentTime + t + 0.3); o.start(_audio.currentTime + t); o.stop(_audio.currentTime + t + 0.3); });
+  } catch {}
+  try { navigator.vibrate && navigator.vibrate([300, 150, 300]); } catch {}
+}
+function escucharPedidos() {
+  if (_canalPedidos) return;
+  _canalPedidos = sb.channel('pedidos-nuevos')
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pedidos' }, ev => {
+      sonarAviso();
+      const p = ev.new || {};
+      toast(`Nuevo pedido: ${p.nombre || ''} · ${p.marcas ? Object.entries(p.marcas).map(([m, q]) => q + ' ' + m).join(', ') : (p.cantidad || '') + ' garrafones'}`, 'ok');
+      if (S.modo === 'repartidor' && S.tab === 'r_pedidos') render();
+    }).subscribe();
+}
+// Pide a Supabase que mande la notificación al teléfono de Javier (si falla, igual le llega en tiempo real)
+function avisarPush(id) { try { sb.functions.invoke('aviso-pedido', { body: { id } }).catch(() => {}); } catch {} }
+const b64aBytes = b => { const p = '='.repeat((4 - b.length % 4) % 4), r = atob((b + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from([...r].map(c => c.charCodeAt(0))); };
+async function suscripcionPush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !CFG.VAPID_PUBLICA) return null;
+  const reg = await navigator.serviceWorker.ready;
+  return reg.pushManager.getSubscription();
+}
+async function pintarAvisos() {
+  const box = document.getElementById('rp-avisos'); if (!box) return;
+  if (!('PushManager' in window) || !('Notification' in window)) { box.innerHTML = '<div class="alert warn">Este teléfono no permite avisos con la pantalla bloqueada. Abre la app en Chrome.</div>'; return; }
+  const sub = await suscripcionPush().catch(() => null);
+  if (sub && Notification.permission === 'granted') { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="alert warn" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span>Activa los avisos para que te suene aunque el teléfono esté bloqueado.</span><span class="sp"></span><button class="btn sm" id="rp-act">Activar avisos</button></div>`;
+  document.getElementById('rp-act').onclick = e => busy(e.currentTarget, async () => {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') throw new Error('No diste permiso de notificaciones. Actívalo en Ajustes de Chrome → Notificaciones.');
+    const reg = await navigator.serviceWorker.ready;
+    const s = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64aBytes(CFG.VAPID_PUBLICA) });
+    const j = s.toJSON();
+    const { error } = await sb.rpc('guardar_push', { p_endpoint: j.endpoint, p_p256dh: j.keys.p256dh, p_auth: j.keys.auth });
+    if (error) throw error;
+    sonarAviso(); toast('Avisos activados en este teléfono', 'ok'); pintarAvisos();
+  });
+}
+
 /* =====================================================================
    REPARTIDOR
    ===================================================================== */
@@ -46,6 +93,7 @@ async function renderReparto() {
     : [['r_pedidos', 'Pedidos'], ['r_vuelta', 'Nueva vuelta'], ['r_cerrar', 'Cerrar turno']];
   if (!tabs.some(x => x[0] === S.tab)) S.tab = tabs[0][0];
   const main = shell(tabs);
+  if (t === 'moto') escucharPedidos();
   return VISTAS_REPARTO[S.tab](main);
 }
 
@@ -201,24 +249,30 @@ const VISTAS_REPARTO = {
     const { data: ps, error } = await sb.from('pedidos').select('*').eq('estado', 'pendiente').order('creado_en');
     if (error) throw error;
     const { data: hechos } = await sb.from('pedidos').select('*').eq('turno_id', S.turno.id).eq('estado', 'entregado').order('entregado_en', { ascending: false });
-    const prod = id => S.productos.find(p => p.id === id)?.nombre || '';
-    main.innerHTML = barraCarga(r) + `
+    const carga = {};
+    (ps || []).forEach(p => { if (p.marcas) Object.entries(p.marcas).forEach(([m, q]) => carga[m] = (carga[m] || 0) + num(q)); else carga['Sin marca'] = (carga['Sin marca'] || 0) + num(p.cantidad); });
+    const totPend = (ps || []).reduce((x, p) => x + num(p.cantidad), 0);
+    main.innerHTML = barraCarga(r) + `<div id="rp-avisos"></div>
+    <div class="card" style="padding:16px"><div class="row"><h2 style="margin:0">Llevar para los pendientes</h2><span class="sp"></span><span class="tag inf">${fmtN(totPend)} garrafones</span></div>
+      <div style="font-size:18px;margin-top:8px">${Object.entries(carga).map(([m, q]) => `<b>${q}</b> ${esc(m)}`).join(' · ') || '<span class="mut">Nada pendiente</span>'}</div></div>
     <div class="row" style="margin-bottom:10px"><h2 style="margin:0">Pedidos pendientes (${(ps || []).length})</h2><span class="sp"></span><button class="btn sm sec" id="rp-ref">Actualizar</button></div>
     ${(ps || []).map(p => `<div class="card" style="padding:16px">
-      <div class="row"><b style="font-size:18px">${esc(p.nombre)}</b><span class="sp"></span><span class="tag ${p.forma_pago === 'efectivo' ? 'warn' : 'inf'}">${p.forma_pago === 'efectivo' ? 'Cobrar efectivo' : 'Transferencia'}</span></div>
-      <div style="margin:6px 0">${esc(p.domicilio)}</div>
-      <div class="mut small">${fmtN(p.cantidad)} × ${esc(prod(p.producto_id))} · <b>${money(p.cantidad * num(p.precio_unitario))}</b>${p.notas ? ' · ' + esc(p.notas) : ''} · pedido ${fmtHora(p.creado_en)}</div>
+      <div class="row"><b style="font-size:18px">${esc(p.nombre)}</b>${p.origen === 'cliente' ? ' <span class="tag inf">Pidió en línea</span>' : ''}<span class="sp"></span><span class="tag ${p.forma_pago === 'efectivo' ? 'warn' : 'inf'}">${p.forma_pago === 'efectivo' ? 'Cobrar efectivo' : 'Transferencia'}</span></div>
+      <div style="margin:6px 0;font-size:17px"><b>${esc(txtMarcas(p))}</b> · ${money(num(p.cantidad) * num(p.precio_unitario))}</div>
+      <div>${esc(p.domicilio)}</div>
+      <div class="mut small">${p.notas ? esc(p.notas) + ' · ' : ''}pedido ${fmtHora(p.creado_en)}</div>
       <div class="row" style="margin-top:12px">
-        <a class="btn sm sec" href="${esc(linkMaps(p.domicilio, p.maps_url))}" target="_blank" rel="noopener">Ver en Maps</a>
-        ${p.telefono ? `<a class="btn sm ghost" href="tel:${esc(p.telefono)}">Llamar</a><a class="btn sm ghost" href="https://wa.me/52${esc(String(p.telefono).replace(/\D/g, '').slice(-10))}" target="_blank" rel="noopener">WhatsApp</a>` : ''}
-        <span class="sp"></span><button class="btn sm ok" data-ent="${p.id}">Entregado</button></div></div>`).join('') || '<div class="card empty">No hay pedidos pendientes. Toca “Actualizar” para revisar si llegaron nuevos.</div>'}
+        <a class="btn sm sec" href="${esc(linkMaps(p.domicilio, p.maps_url))}" target="_blank" rel="noopener">Maps</a>
+        ${p.telefono ? `<a class="btn sm ghost" href="tel:${esc(p.telefono)}">Llamar</a><a class="btn sm ghost" href="https://wa.me/52${esc(soloDig(p.telefono).slice(-10))}" target="_blank" rel="noopener">WhatsApp</a>` : ''}
+        <span class="sp"></span><button class="btn sm ok" data-ent="${p.id}">Entregado</button></div></div>`).join('') || '<div class="card empty">No hay pedidos pendientes. Cuando llegue uno nuevo te va a sonar.</div>'}
     <div class="card"><h3>Entregados en este turno</h3><table><tbody>
-      ${(hechos || []).map(p => `<tr><td>${fmtHora(p.entregado_en)} · ${esc(p.nombre)}</td><td>${esc(p.forma_pago_real)}</td><td class="n">${money(p.monto_cobrado)}</td></tr>`).join('') || '<tr><td class="empty">Aún no hay entregas</td></tr>'}
+      ${(hechos || []).map(p => `<tr><td>${fmtHora(p.entregado_en)} · ${esc(p.nombre)}<br><span class="mut small">${esc(txtMarcas(p))}</span></td><td>${esc(p.forma_pago_real)}</td><td class="n">${money(p.monto_cobrado)}</td></tr>`).join('') || '<tr><td class="empty">Aún no hay entregas</td></tr>'}
     </tbody></table></div>`;
+    pintarAvisos();
     document.getElementById('rp-ref').onclick = () => VISTAS_REPARTO.r_pedidos(main);
     main.querySelectorAll('[data-ent]').forEach(b => b.onclick = () => {
       const p = ps.find(x => x.id == b.dataset.ent);
-      modal(`<h2>Entregar a ${esc(p.nombre)}</h2>
+      modal(`<h2>Entregar a ${esc(p.nombre)}</h2><p><b>${esc(txtMarcas(p))}</b></p>
         <div class="field"><label>Garrafones entregados</label><input type="number" id="ep-q" value="${p.cantidad}" inputmode="numeric"></div>
         <div class="field"><label>¿Cómo pagó?</label><div class="pay"><button data-fp="efectivo" class="${p.forma_pago === 'efectivo' ? 'on' : ''}">Efectivo</button><button data-fp="transferencia" class="${p.forma_pago === 'transferencia' ? 'on' : ''}">Transferencia</button></div></div>
         <div class="total"><span>Cobrar</span><span id="ep-t">${money(p.cantidad * num(p.precio_unitario))}</span></div>
@@ -309,20 +363,26 @@ function arqueoReparto(main, x) {
 /* =====================================================================
    PEDIDOS (captura) — dueños y ventanilla
    ===================================================================== */
+const MARCAS = ['Ciel', 'Epura', 'Bluerock', 'Bonafont', 'Rositas'];
+const txtMarcas = p => p.marcas && Object.keys(p.marcas).length
+  ? Object.entries(p.marcas).map(([m, q]) => `${q} ${m}`).join(' · ')
+  : `${fmtN(p.cantidad)} ${S.productos.find(x => x.id === p.producto_id)?.nombre || 'garrafones'}`;
+const soloDig = t => String(t || '').replace(/\D/g, '');
+
 async function vistaPedidos(main) {
   await cargarCatalogos();
   const hoy = fechaMX();
   const { data: ps, error } = await sb.from('pedidos').select('*').or(`estado.eq.pendiente,creado_en.gte.${inicioMX(hoy)}`).order('creado_en', { ascending: false }).limit(200);
   if (error) throw error;
   const domis = S.clientes.filter(c => c.tipo === 'domicilio');
-  const prods = S.productos.filter(p => p.activo && p.cuenta_garrafon);
-  const prod = id => S.productos.find(p => p.id === id)?.nombre || '';
+  const rel = S.productos.find(p => p.nombre === 'Relleno garrafón');
+  const precio = num(rel?.precio_domicilio ?? rel?.precio);
   const tag = e => e === 'pendiente' ? '<span class="tag warn">Pendiente</span>' : e === 'entregado' ? '<span class="tag ok">Entregado</span>' : '<span class="tag bad">Cancelado</span>';
   const pend = (ps || []).filter(p => p.estado === 'pendiente');
   const ent = (ps || []).filter(p => p.estado === 'entregado');
   main.innerHTML = `
   <div class="grid g4" style="margin-bottom:16px">
-    <div class="kpi"><div class="l">Pendientes</div><div class="v">${pend.length}</div></div>
+    <div class="kpi"><div class="l">Pendientes</div><div class="v">${pend.length}</div><div class="s">${fmtN(pend.reduce((s, p) => s + num(p.cantidad), 0))} garrafones</div></div>
     <div class="kpi"><div class="l">Entregados hoy</div><div class="v">${ent.length}</div><div class="s">${fmtN(ent.reduce((s, p) => s + num(p.entregado_cantidad), 0))} garrafones</div></div>
     <div class="kpi"><div class="l">Cobrado efectivo</div><div class="v">${money0(ent.filter(p => p.forma_pago_real === 'efectivo').reduce((s, p) => s + num(p.monto_cobrado), 0))}</div></div>
     <div class="kpi"><div class="l">Cobrado transferencia</div><div class="v">${money0(ent.filter(p => p.forma_pago_real === 'transferencia').reduce((s, p) => s + num(p.monto_cobrado), 0))}</div></div>
@@ -330,48 +390,75 @@ async function vistaPedidos(main) {
   <div class="grid g2">
     <div class="card">
       <h2>Nuevo pedido</h2>
-      <div class="field"><label>Cliente frecuente (opcional)</label><select id="pd-cli"><option value="">— Cliente nuevo —</option>${domis.map(c => `<option value="${c.id}">${esc(c.nombre)}${c.domicilio ? ' · ' + esc(c.domicilio) : ''}</option>`).join('')}</select></div>
+      <div class="field"><label>Buscar cliente: teléfono, nombre o calle</label><input type="search" id="pd-bus" placeholder="ej. 3312 o Pérez o Cerezo" autocomplete="off"></div>
+      <div id="pd-res"></div>
+      <div id="pd-ult"></div>
+      <div class="field"><label>Garrafones por marca</label>
+        <div id="pd-marcas">${MARCAS.map(m => `<div class="cart-line"><span class="n">${m}</span><button class="qb" data-mm="${m}">−</button><b id="pd-q-${m}" style="min-width:28px;text-align:center">0</b><button class="qb" data-mp="${m}">+</button></div>`).join('')}</div></div>
+      <div class="total"><span id="pd-tq">0 garrafones</span><span id="pd-tt">$0.00</span></div>
       <div class="grid g2">
         <div class="field"><label>Nombre</label><input type="text" id="pd-n"></div>
         <div class="field"><label>Teléfono</label><input type="tel" id="pd-t" inputmode="tel"></div>
       </div>
       <div class="field"><label>Domicilio</label><input type="text" id="pd-d" placeholder="Calle, número, coto"></div>
       <div class="field"><label>Liga de Google Maps (opcional)</label><input type="text" id="pd-m"></div>
-      <div class="grid g2">
-        <div class="field"><label>Producto</label><select id="pd-p">${prods.map(p => `<option value="${p.id}">${esc(p.nombre)} · ${money(p.precio_domicilio ?? p.precio)}</option>`).join('')}</select></div>
-        <div class="field"><label>Cantidad</label><input type="number" id="pd-q" value="1" inputmode="numeric"></div>
-      </div>
-      <div class="field"><label>Pagará con</label><select id="pd-fp"><option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option></select></div>
-      <div class="field"><label>Notas</label><input type="text" id="pd-no" placeholder="ej. Tocar el timbre, dejar con el guardia"></div>
-      <label class="chk"><input type="checkbox" id="pd-g"> Guardar como cliente frecuente</label>
-      <button class="btn big" id="pd-b">Enviar pedido al repartidor</button>
+      <div class="field"><label>Pagará con</label><div class="pay" id="pd-fp"><button data-fp="efectivo" class="on">Efectivo</button><button data-fp="transferencia">Transferencia</button></div></div>
+      <div class="field"><label>Notas para Javier</label><input type="text" id="pd-no" placeholder="ej. Tocar el timbre, dejar con el guardia"></div>
+      <button class="btn big" id="pd-b">Enviar pedido a Javier</button>
+      <p class="mut small">El cliente se guarda solo con su teléfono. La próxima vez lo encuentras en el buscador con su último pedido.</p>
     </div>
     <div class="card"><h2>Pedidos de hoy</h2><div class="tw"><table><thead><tr><th>Cliente</th><th>Pedido</th><th>Estado</th><th></th></tr></thead><tbody>
       ${(ps || []).map(p => `<tr><td><b>${esc(p.nombre)}</b><br><span class="mut small">${esc(p.domicilio)}</span></td>
-        <td>${fmtN(p.cantidad)} ${esc(prod(p.producto_id))}<br><span class="mut small">${fmtHora(p.creado_en)} · ${esc(p.forma_pago)}</span></td>
+        <td>${esc(txtMarcas(p))}<br><span class="mut small">${fmtHora(p.creado_en)} · ${esc(p.forma_pago)}${p.origen === 'cliente' ? ' · <b>pidió en línea</b>' : ''}</span>${p.notas ? `<br><span class="mut small">${esc(p.notas)}</span>` : ''}</td>
         <td>${tag(p.estado)}${p.estado === 'entregado' ? `<br><span class="mut small">${fmtHora(p.entregado_en)} · ${money(p.monto_cobrado)} ${esc(p.forma_pago_real)}</span>` : ''}</td>
         <td>${p.estado === 'pendiente' ? `<button class="btn sm ghost" data-can="${p.id}">Cancelar</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Sin pedidos hoy</td></tr>'}
     </tbody></table></div></div>
   </div>`;
-  document.getElementById('pd-cli').onchange = e => {
-    const c = S.clientes.find(x => x.id == e.target.value);
-    document.getElementById('pd-n').value = c?.nombre || ''; document.getElementById('pd-t').value = c?.telefono || '';
-    document.getElementById('pd-d').value = c?.domicilio || ''; document.getElementById('pd-m').value = c?.maps_url || '';
-    document.getElementById('pd-g').closest('label').classList.toggle('hidden', !!c);
+  const q = Object.fromEntries(MARCAS.map(m => [m, 0]));
+  let cli = null, fp = 'efectivo';
+  const pintaQ = () => {
+    MARCAS.forEach(m => document.getElementById('pd-q-' + m).textContent = q[m]);
+    const t = MARCAS.reduce((x, m) => x + q[m], 0);
+    document.getElementById('pd-tq').textContent = `${t} ${t === 1 ? 'garrafón' : 'garrafones'}`;
+    document.getElementById('pd-tt').textContent = money(t * precio);
+  };
+  main.querySelectorAll('[data-mp]').forEach(b => b.onclick = () => { q[b.dataset.mp]++; pintaQ(); });
+  main.querySelectorAll('[data-mm]').forEach(b => b.onclick = () => { q[b.dataset.mm] = Math.max(0, q[b.dataset.mm] - 1); pintaQ(); });
+  main.querySelectorAll('#pd-fp [data-fp]').forEach(b => b.onclick = () => { fp = b.dataset.fp; main.querySelectorAll('#pd-fp [data-fp]').forEach(x => x.classList.toggle('on', x === b)); });
+  const elegir = async c => {
+    cli = c;
+    document.getElementById('pd-res').innerHTML = '';
+    document.getElementById('pd-bus').value = c.nombre;
+    document.getElementById('pd-n').value = c.nombre || ''; document.getElementById('pd-t').value = c.telefono || '';
+    document.getElementById('pd-d').value = c.domicilio || ''; document.getElementById('pd-m').value = c.maps_url || '';
+    const { data: u } = await sb.from('pedidos').select('marcas,cantidad,producto_id,forma_pago,creado_en,notas').eq('cliente_id', c.id).neq('estado', 'cancelado').order('creado_en', { ascending: false }).limit(1);
+    const ul = u && u[0];
+    MARCAS.forEach(m => q[m] = 0);
+    if (ul?.marcas) Object.entries(ul.marcas).forEach(([m, n]) => { if (m in q) q[m] = num(n); });
+    if (ul?.forma_pago) main.querySelector(`#pd-fp [data-fp="${ul.forma_pago}"]`)?.click();
+    document.getElementById('pd-ult').innerHTML = ul ? `<div class="alert inf">Último pedido (${fmtFecha(ul.creado_en)}): <b>${esc(txtMarcas(ul))}</b>. Ya quedó cargado; ajusta si cambia.</div>` : '<div class="alert inf">Primer pedido de este cliente.</div>';
+    pintaQ();
+  };
+  document.getElementById('pd-bus').oninput = e => {
+    const t = e.target.value.trim().toLowerCase(), d = soloDig(t);
+    cli = null;
+    const res = t.length < 2 ? [] : domis.filter(c => (d.length >= 3 && soloDig(c.telefono).includes(d)) || (c.nombre || '').toLowerCase().includes(t) || (c.domicilio || '').toLowerCase().includes(t)).slice(0, 8);
+    document.getElementById('pd-res').innerHTML = res.map(c => `<button class="btn ghost" style="display:block;width:100%;text-align:left;margin-bottom:6px" data-cl="${c.id}"><b>${esc(c.nombre)}</b> <span class="mut small">${esc(c.telefono || '')} · ${esc(c.domicilio || '')}</span></button>`).join('')
+      + (t.length >= 2 && !res.length ? '<div class="mut small" style="margin-bottom:10px">No está registrado: llena sus datos abajo y se guarda solo.</div>' : '');
+    document.querySelectorAll('[data-cl]').forEach(b => b.onclick = () => elegir(domis.find(c => c.id == b.dataset.cl)));
+    if (d.length >= 7 && !res.length) document.getElementById('pd-t').value = e.target.value.trim();
   };
   document.getElementById('pd-b').onclick = e => busy(e.currentTarget, async () => {
+    const tot = MARCAS.reduce((x, m) => x + q[m], 0);
+    if (!tot) throw new Error('Agrega al menos un garrafón');
     if (!val('pd-d')) throw new Error('Escribe el domicilio');
-    const q = nval('pd-q'); if (!q || q <= 0) throw new Error('Escribe la cantidad');
-    let cli = val('pd-cli') ? Number(val('pd-cli')) : null;
-    if (!cli && chk('pd-g')) {
-      if (!val('pd-n')) throw new Error('Escribe el nombre para guardarlo como cliente');
-      const { data, error } = await sb.from('clientes').insert({ tipo: 'domicilio', nombre: val('pd-n'), telefono: val('pd-t') || null, domicilio: val('pd-d'), maps_url: val('pd-m') || null }).select('id').single();
-      if (error) throw error; cli = data.id;
-    }
-    const { error } = await sb.rpc('crear_pedido', { p_nombre: val('pd-n'), p_telefono: val('pd-t') || null, p_domicilio: val('pd-d'), p_maps: val('pd-m') || null,
-      p_producto_id: Number(val('pd-p')), p_cantidad: q, p_forma_pago: val('pd-fp'), p_notas: val('pd-no') || null, p_cliente_id: cli });
+    if (!cli && !val('pd-t')) throw new Error('Escribe el teléfono para guardar al cliente');
+    const marcas = Object.fromEntries(MARCAS.filter(m => q[m] > 0).map(m => [m, q[m]]));
+    const { data: pid, error } = await sb.rpc('crear_pedido', { p_nombre: val('pd-n'), p_telefono: val('pd-t') || null, p_domicilio: val('pd-d'), p_maps: val('pd-m') || null,
+      p_producto_id: rel?.id || null, p_cantidad: tot, p_forma_pago: fp, p_notas: val('pd-no') || null, p_cliente_id: cli?.id || null, p_marcas: marcas });
     if (error) throw error;
-    toast('Pedido enviado al repartidor', 'ok'); vistaPedidos(main);
+    avisarPush(pid);
+    toast('Pedido enviado a Javier', 'ok'); await vistaPedidos(main); document.getElementById('pd-bus')?.focus();
   });
   main.querySelectorAll('[data-can]').forEach(b => b.onclick = () => modal(`<h2>Cancelar pedido</h2><div class="field"><label>Motivo</label><input type="text" id="cp-m"></div>
     <div class="row"><button class="btn ghost" data-close>Regresar</button><span class="sp"></span><button class="btn bad" id="cp-b">Cancelar pedido</button></div>`,
@@ -379,6 +466,7 @@ async function vistaPedidos(main) {
       const { error } = await sb.rpc('cancelar_pedido', { p_pedido_id: Number(b.dataset.can), p_motivo: val('cp-m') || 'Sin motivo' });
       if (error) throw error; close(); toast('Pedido cancelado', 'ok'); vistaPedidos(main);
     })));
+  pintaQ(); document.getElementById('pd-bus').focus();
 }
 
 /* =====================================================================
