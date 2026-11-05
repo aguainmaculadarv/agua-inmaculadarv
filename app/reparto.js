@@ -592,6 +592,8 @@ VISTAS_DUENO.reparto = async function (main) {
     sb.from('turnos').select('*').in('tipo', ['camioneta', 'moto']).gte('abierto_en', ini).lt('abierto_en', fin).order('abierto_en', { ascending: false }),
     sb.from('pedidos').select('*').gte('creado_en', ini).lt('creado_en', fin)
   ]);
+  // historial de 120 días para clientes nuevos / que dejaron de pedir
+  const hist = await fetchAll(() => sb.from('pedidos').select('cliente_id,creado_en').neq('estado', 'cancelado').gte('creado_en', inicioMX(addDays(fechaMX(), -120))).order('id'));
   const cli = id => S.clientes.find(c => c.id === id);
   const nom = id => esc(S.perfiles.find(p => p.id === id)?.nombre || '—');
   const porEmp = {};
@@ -618,6 +620,32 @@ VISTAS_DUENO.reparto = async function (main) {
       ${(en || []).slice(0, 40).map(e => `<tr><td>${fmtFecha(e.fecha)}</td><td><b>${esc(cli(e.cliente_id)?.nombre || '')}</b><br><span class="mut small">Recibió: ${esc(e.recibio || '')}</span></td><td class="n">${e.llenos} / ${e.vacios}</td><td>${e.firma ? `<button class="btn sm sec" data-foto="${esc(e.firma)}">Firma</button>` : ''}</td></tr>`).join('') || '<tr><td class="empty">Sin entregas</td></tr>'}
     </tbody></table></div></div>
   </div>`;
+  // ---------- Domicilio Real del Valle ----------
+  const vivos = (pe || []).filter(p => p.estado !== 'cancelado');
+  const marcasEnt = {};
+  peEnt.forEach(p => { if (p.marcas) Object.entries(p.marcas).forEach(([m, q]) => marcasEnt[m] = (marcasEnt[m] || 0) + num(q)); else marcasEnt['Sin marca'] = (marcasEnt['Sin marca'] || 0) + num(p.entregado_cantidad); });
+  const ultimo = {}, primero = {};
+  hist.forEach(h => { if (!h.cliente_id) return; const t = h.creado_en; if (!ultimo[h.cliente_id] || t > ultimo[h.cliente_id]) ultimo[h.cliente_id] = t; if (!primero[h.cliente_id] || t < primero[h.cliente_id]) primero[h.cliente_id] = t; });
+  const cliPer = [...new Set(vivos.map(p => p.cliente_id).filter(Boolean))];
+  const nuevos = cliPer.filter(id => primero[id] >= ini).length;
+  const diasSin = id => Math.floor((Date.now() - new Date(ultimo[id])) / 864e5);
+  const dormidos = S.clientes.filter(c => c.tipo === 'domicilio' && ultimo[c.id] && diasSin(c.id) >= 14).sort((x, y) => diasSin(x.id) - diasSin(y.id)).slice(0, 30);
+  const efe = peEnt.filter(p => p.forma_pago_real === 'efectivo').reduce((x, p) => x + num(p.monto_cobrado), 0);
+  const tra = peEnt.filter(p => p.forma_pago_real === 'transferencia').reduce((x, p) => x + num(p.monto_cobrado), 0);
+  main.insertAdjacentHTML('beforeend', `
+  <div class="card"><h2>Domicilio · Real del Valle</h2>
+    <div class="grid g4" style="margin-bottom:12px">
+      <div class="kpi"><div class="l">Pedidos</div><div class="v">${fmtN(vivos.length)}</div><div class="s">${fmtN(peEnt.length)} entregados · ${fmtN(vivos.length - peEnt.length)} pendientes</div></div>
+      <div class="kpi"><div class="l">Garrafones entregados</div><div class="v">${fmtN(peEnt.reduce((x, p) => x + num(p.entregado_cantidad), 0))}</div></div>
+      <div class="kpi"><div class="l">Cobrado</div><div class="v">${money0(efe + tra)}</div><div class="s">Efectivo ${money0(efe)} · Transf. ${money0(tra)}</div></div>
+      <div class="kpi"><div class="l">Clientes</div><div class="v">${fmtN(cliPer.length)}</div><div class="s">${fmtN(nuevos)} nuevos · ${fmtN(cliPer.length - nuevos)} que repiten</div></div>
+    </div>
+    <h3>Garrafones entregados por marca</h3>
+    <div style="font-size:17px;margin-bottom:12px">${Object.entries(marcasEnt).sort((x, y) => y[1] - x[1]).map(([m, q]) => `<b>${fmtN(q)}</b> ${esc(m)}`).join(' · ') || '<span class="mut">Sin entregas en este periodo</span>'}</div>
+    <h3>Clientes que llevan 2 semanas o más sin pedir</h3>
+    <div class="tw"><table><tbody>${dormidos.map(c => `<tr><td><b>${esc(c.nombre)}</b><br><span class="mut small">${esc(c.domicilio || '')}</span></td><td>${diasSin(c.id)} días</td>
+      <td>${c.telefono ? `<a class="btn sm ghost" href="https://wa.me/52${esc(soloDig(c.telefono).slice(-10))}" target="_blank" rel="noopener">WhatsApp</a>` : ''}</td></tr>`).join('') || '<tr><td class="empty">Todos tus clientes han pedido en las últimas 2 semanas</td></tr>'}</tbody></table></div>
+  </div>`);
   per.bind();
   main.querySelectorAll('[data-foto]').forEach(b => b.onclick = () => verFoto(b.dataset.foto));
 };
