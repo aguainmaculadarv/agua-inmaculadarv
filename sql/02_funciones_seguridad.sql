@@ -64,6 +64,11 @@ begin
 
     v_precio := case when p_canal = 'domicilio' then coalesce(v_prod.precio_domicilio, v_prod.precio)
                      else v_prod.precio end;
+    -- Repartidor (cliente tipo distribuidor): paga en planta el precio a domicilio de cada producto
+    if v_cli.id is not null and v_cli.tipo = 'distribuidor' then
+      v_precio := coalesce(v_prod.precio_domicilio, v_prod.precio);
+    end if;
+    -- Precio especial por cliente (empresas y repartidores) en el relleno
     if v_cli.id is not null and v_cli.precio_especial is not null and v_prod.nombre = 'Relleno garrafón' then
       v_precio := v_cli.precio_especial;
     end if;

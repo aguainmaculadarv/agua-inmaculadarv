@@ -292,6 +292,7 @@ const VISTAS_PLANTA = {
     const precioDe = p => {
       const c = S.clientes.find(x => x.id == S.clienteId);
       if (c && c.precio_especial && p.nombre === 'Relleno garrafón') return num(c.precio_especial);
+      if (c && c.tipo === 'distribuidor') return num(p.precio_domicilio ?? p.precio);
       return num(p.precio);
     };
     const pintar = () => {
