@@ -1,5 +1,5 @@
 // Service worker mínimo: permite instalar la app. Siempre busca la versión más nueva en línea.
-const CACHE = 'ai-v3';
+const CACHE = 'ai-v4';
 self.addEventListener('install', e => { self.skipWaiting(); });
 self.addEventListener('activate', e => { e.waitUntil(self.clients.claim()); });
 self.addEventListener('fetch', e => {

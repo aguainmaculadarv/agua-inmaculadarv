@@ -688,14 +688,24 @@ async function estadoCuenta(clienteId, mes) {
     sb.rpc('cuentas_por_cobrar')]);
   if (error) throw error;
   const ids = (en || []).map(e => e.venta_id).filter(Boolean);
-  const { data: vs } = ids.length ? await sb.from('ventas').select('id,total,forma_pago,cancelada').in('id', ids) : { data: [] };
+  const [{ data: vs }, { data: vp }] = await Promise.all([
+    ids.length ? sb.from('ventas').select('id,total,forma_pago,cancelada').in('id', ids) : Promise.resolve({ data: [] }),
+    sb.from('ventas').select('id,fecha,total,forma_pago,cancelada,canal,venta_detalle(cantidad,producto_id)').eq('cliente_id', clienteId).eq('cancelada', false).gte('fecha', ini).lt('fecha', fin).order('fecha')]);
   const venta = id => (vs || []).find(v => v.id === id);
   const paths = (en || []).map(e => e.firma).filter(Boolean);
   const { data: urls } = paths.length ? await sb.storage.from('evidencias').createSignedUrls(paths, 3600) : { data: [] };
   const urlDe = p => (urls || []).find(u => u.path === p)?.signedUrl;
-  const imp = e => { const v = venta(e.venta_id); return v && !v.cancelada ? num(v.total) : 0; };
-  const tL = (en || []).reduce((s, e) => s + num(e.llenos), 0), tN = (en || []).reduce((s, e) => s + num(e.nuevos), 0), tV = (en || []).reduce((s, e) => s + num(e.vacios), 0);
-  const tImp = (en || []).reduce((s, e) => s + imp(e), 0), tCred = (en || []).filter(e => venta(e.venta_id)?.forma_pago === 'credito').reduce((s, e) => s + imp(e), 0);
+  const idRel = S.productos.find(p => p.nombre === 'Relleno garrafón')?.id, idNue = S.productos.find(p => p.nombre === 'Garrafón nuevo')?.id;
+  const cant = (v, pid) => (v.venta_detalle || []).filter(d => d.producto_id === pid).reduce((s, d) => s + num(d.cantidad), 0);
+  // renglones: entregas de Javier + ventas en planta que no vienen de una entrega
+  const filas = (en || []).map(e => { const v = venta(e.venta_id); return { fecha: e.fecha, folio: folioE(e.id), llenos: num(e.llenos), nuevos: num(e.nuevos), vacios: num(e.vacios),
+      recibio: esc(e.recibio || '') + (urlDe(e.firma) ? `<br><img src="${esc(urlDe(e.firma))}" alt="firma" style="height:28px;max-width:90px">` : ''),
+      imp: v && !v.cancelada ? num(v.total) : 0, fp: v?.forma_pago }; })
+    .concat((vp || []).filter(v => !ids.includes(v.id)).map(v => ({ fecha: v.fecha, folio: 'Ticket #' + v.id, llenos: cant(v, idRel), nuevos: cant(v, idNue), vacios: null,
+      recibio: 'Recogió en planta', imp: num(v.total), fp: v.forma_pago })))
+    .sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+  const tL = filas.reduce((s, x) => s + x.llenos, 0), tN = filas.reduce((s, x) => s + x.nuevos, 0), tV = filas.reduce((s, x) => s + num(x.vacios), 0);
+  const tImp = filas.reduce((s, x) => s + x.imp, 0), tCred = filas.filter(x => x.fp === 'credito').reduce((s, x) => s + x.imp, 0);
   const tPag = (co || []).reduce((s, p) => s + num(p.monto), 0);
   const saldo = num((cxc || []).find(x => x.cliente_id == clienteId)?.saldo);
   const nomMes = (m => m.charAt(0).toUpperCase() + m.slice(1))(new Date(mes + '-15T12:00:00').toLocaleDateString('es-MX', { month: 'long', year: 'numeric' }).replace(' de ', ' '));
@@ -706,12 +716,12 @@ async function estadoCuenta(clienteId, mes) {
       <h2 style="margin:10px 0 2px">ESTADO DE CUENTA</h2><div>${esc(nomMes)}</div></div>
     <p><b style="font-size:18px">${esc(c.nombre)}</b><br>${esc(txtCredito(c))}${c.contacto ? ' · ' + esc(c.contacto) : ''}</p>
     <div style="overflow-x:auto"><table class="ect"><thead><tr><th>Fecha</th><th>Llenos</th><th>Nuevos</th><th>Vacíos</th><th>Recibió</th><th style="text-align:right">Importe</th></tr></thead><tbody>
-    ${(en || []).map(e => `<tr><td>${dm(e.fecha)}<br><small style="white-space:nowrap;color:#5B7680">${folioE(e.id)}</small></td><td>${e.llenos}</td><td>${num(e.nuevos) || ''}</td><td>${e.vacios}</td>
-      <td>${esc(e.recibio || '')}${urlDe(e.firma) ? `<br><img src="${esc(urlDe(e.firma))}" alt="firma" style="height:28px;max-width:90px">` : ''}</td><td style="text-align:right">${money(imp(e))}${venta(e.venta_id)?.forma_pago && venta(e.venta_id).forma_pago !== 'credito' ? '<br><small>pagado</small>' : ''}</td></tr>`).join('') || '<tr><td colspan="6" style="text-align:center">Sin entregas en el mes</td></tr>'}
+    ${filas.map(x => `<tr><td>${dm(x.fecha)}<br><small style="white-space:nowrap;color:#5B7680">${esc(x.folio)}</small></td><td>${x.llenos || ''}</td><td>${x.nuevos || ''}</td><td>${x.vacios ?? '—'}</td>
+      <td>${x.recibio}</td><td style="text-align:right">${money(x.imp)}${x.fp && x.fp !== 'credito' ? '<br><small>pagado</small>' : ''}</td></tr>`).join('') || '<tr><td colspan="6" style="text-align:center">Sin movimientos en el mes</td></tr>'}
     </tbody><tfoot><tr><th>Total</th><th>${tL}</th><th>${tN || ''}</th><th>${tV}</th><th></th><th style="text-align:right">${money(tImp)}</th></tr></tfoot></table></div>
     ${(co || []).length ? `<h3>Pagos recibidos en el mes</h3><table class="ect"><tbody>${co.map(p => `<tr><td>${f(p.fecha)}</td><td>${esc(p.forma_pago)}${p.notas ? ' · ' + esc(p.notas) : ''}</td><td style="text-align:right">${money(p.monto)}</td></tr>`).join('')}</tbody></table>` : ''}
     <table class="ect" style="margin-top:12px"><tbody>
-      <tr><td>Entregas a crédito del mes</td><td style="text-align:right">${money(tCred)}</td></tr>
+      <tr><td>Compras a crédito del mes</td><td style="text-align:right">${money(tCred)}</td></tr>
       <tr><td>Pagos del mes</td><td style="text-align:right">${money(tPag)}</td></tr>
       <tr><td><b>Saldo pendiente al ${new Date().toLocaleDateString('es-MX', { timeZone: CFG.ZONA })}</b></td><td style="text-align:right"><b>${money(saldo)}</b></td></tr></tbody></table>
     <p style="text-align:center;color:#5B7680;font-size:12px;margin-top:14px">Agua Inmaculada Real del Valle · WhatsApp 33 3033 4510</p></div>`;
