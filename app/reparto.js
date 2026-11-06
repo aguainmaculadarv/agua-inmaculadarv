@@ -616,9 +616,18 @@ async function datosEntrega(id) {
     sb.from('clientes').select('*').eq('id', e.cliente_id).maybeSingle()]);
   return { e, v, c: c || S.clientes.find(x => x.id === e.cliente_id) || {} };
 }
+async function datosVenta(id) {
+  const { data: v, error } = await sb.from('ventas').select('id,fecha,total,forma_pago,cancelada,recibio,firma,cliente_id,venta_detalle(cantidad,producto_id,precio_unitario)').eq('id', id).single();
+  if (error) throw error;
+  const { data: c } = v.cliente_id ? await sb.from('clientes').select('*').eq('id', v.cliente_id).maybeSingle() : { data: null };
+  const nomP = pid => S.productos.find(p => p.id === pid)?.nombre || 'Producto';
+  return { e: { id: v.id, fecha: v.fecha, recibio: v.recibio, firma: v.firma, vacios: null }, v, c: c || {},
+    folio: 'Ticket #' + v.id, lugar: 'Recogió en planta',
+    lineas: (v.venta_detalle || []).map(d => [`${nomP(d.producto_id)}  ${d.cantidad} × ${money(d.precio_unitario)}`, money(num(d.cantidad) * num(d.precio_unitario))]) };
+}
 const txtCondicion = (v, c) => !v ? '—' : v.forma_pago === 'credito' ? (c.dias_credito ? `Crédito ${c.dias_credito} días` : 'Crédito') : 'Contado · ' + (v.forma_pago === 'transferencia' ? 'Transferencia' : 'Efectivo');
 
-async function canvasNota({ e, v, c }) {
+async function canvasNota({ e, v, c, folio, lugar, lineas }) {
   const W = 720, P = 44;
   const [logo, firma] = await Promise.all([cargarImg('logo.jpg'), urlFirma(e.firma).then(u => u ? cargarImg(u) : null)]);
   const det = v?.venta_detalle || [];
@@ -634,14 +643,18 @@ async function canvasNota({ e, v, c }) {
   if (logo) { const lw = 320, lh = logo.height * lw / logo.width; g.drawImage(logo, (W - lw) / 2, y, lw, lh); y += lh + 14; }
   y += 30; F(24); txt('Real del Valle', W / 2, 'center'); y += 52;
   F(36, true); txt('NOTA DE ENTREGA', W / 2, 'center'); y += 44;
-  F(24); txt(`Folio ${folioE(e.id)}  ·  ${new Date(e.fecha).toLocaleString('es-MX', { timeZone: CFG.ZONA, day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`, W / 2, 'center'); y += 10;
+  F(24); txt(`${folio || 'Folio ' + folioE(e.id)}  ·  ${new Date(e.fecha).toLocaleString('es-MX', { timeZone: CFG.ZONA, day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`, W / 2, 'center'); y += 10;
   linea(); y += 10;
   F(22); g.fillStyle = '#5B7680'; txt('CLIENTE', P); y += 36; g.fillStyle = '#10323D';
   F(32, true); txt(c.nombre || '', P); y += 30;
+  if (lugar) { y += 8; F(22); g.fillStyle = '#5B7680'; txt(lugar, P); g.fillStyle = '#10323D'; y += 4; }
   linea(); y += 14;
+  if (lineas) lineas.forEach(([a, b]) => par(a, b));
+  else {
   if (num(e.llenos)) par(`Garrafones llenos  ${e.llenos}${pu(idRel) ? ' × ' + money(pu(idRel)) : ''}`, pu(idRel) ? money(e.llenos * pu(idRel)) : '');
   if (num(e.nuevos)) par(`Garrafones nuevos  ${e.nuevos}${pu(idNue) ? ' × ' + money(pu(idNue)) : ''}`, pu(idNue) ? money(e.nuevos * pu(idNue)) : '');
   par('Vacíos recogidos', String(e.vacios || 0));
+  }
   if (v && !v.cancelada) { y += 6; F(34, true); txt('TOTAL', P); txt(money(v.total), W - P, 'right'); y += 44; }
   F(24); txt(txtCondicion(v, c), P); y += 10;
   if (e.notas) { y += 30; F(22); txt('Notas: ' + e.notas, P); }
@@ -655,14 +668,16 @@ async function canvasNota({ e, v, c }) {
   return out;
 }
 
-async function mostrarNotaEntrega(id) {
-  const d = await datosEntrega(id);
+const mostrarNotaEntrega = async id => mostrarNota(await datosEntrega(id));
+const mostrarNotaVenta = async id => mostrarNota(await datosVenta(id));
+async function mostrarNota(d) {
   const cv = await canvasNota(d);
+  const fol = d.folio || folioE(d.e.id);
   const blob = await new Promise(r => cv.toBlob(r, 'image/png'));
-  const nombre = `Nota_${folioE(d.e.id)}_${(d.c.nombre || 'empresa').normalize('NFD').replace(/[^\w]+/g, '_')}.png`;
+  const nombre = `Nota_${fol.replace(/\W+/g, '')}_${(d.c.nombre || 'empresa').normalize('NFD').replace(/[^\w]+/g, '_')}.png`;
   const file = new File([blob], nombre, { type: 'image/png' });
   const url = URL.createObjectURL(blob);
-  modal(`<h2>Nota ${folioE(d.e.id)}</h2><p class="mut">${esc(d.c.nombre || '')} · recibió ${esc(d.e.recibio || '')}</p>
+  modal(`<h2>Nota ${esc(fol)}</h2><p class="mut">${esc(d.c.nombre || '')} · recibió ${esc(d.e.recibio || '')}</p>
     <img src="${url}" alt="Nota de entrega" style="display:block;width:100%;max-width:360px;margin:0 auto;border:1px solid var(--line);border-radius:10px">
     <div class="row" style="margin-top:14px"><button class="btn ghost" data-close>Cerrar</button><span class="sp"></span><button class="btn sec" id="nt-d">Descargar</button><button class="btn ok" id="nt-s">Enviar por WhatsApp</button></div>
     <p class="mut small">Se abre WhatsApp con la imagen: elige el grupo o el contacto de la empresa.</p>`, box => {
@@ -670,7 +685,7 @@ async function mostrarNotaEntrega(id) {
     box.querySelector('#nt-d').onclick = bajar;
     box.querySelector('#nt-s').onclick = async () => {
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        try { await navigator.share({ files: [file], title: 'Nota de entrega ' + folioE(d.e.id) }); return; }
+        try { await navigator.share({ files: [file], title: 'Nota de entrega ' + fol }); return; }
         catch (err) { if (err && err.name === 'AbortError') return; }
       }
       bajar(); toast('Nota descargada. Adjúntala en WhatsApp.', 'ok');
@@ -690,11 +705,12 @@ async function estadoCuenta(clienteId, mes) {
   const ids = (en || []).map(e => e.venta_id).filter(Boolean);
   const [{ data: vs }, { data: vp }] = await Promise.all([
     ids.length ? sb.from('ventas').select('id,total,forma_pago,cancelada').in('id', ids) : Promise.resolve({ data: [] }),
-    sb.from('ventas').select('id,fecha,total,forma_pago,cancelada,canal,venta_detalle(cantidad,producto_id)').eq('cliente_id', clienteId).eq('cancelada', false).gte('fecha', ini).lt('fecha', fin).order('fecha')]);
+    sb.from('ventas').select('id,fecha,total,forma_pago,cancelada,canal,recibio,firma,venta_detalle(cantidad,producto_id)').eq('cliente_id', clienteId).eq('cancelada', false).gte('fecha', ini).lt('fecha', fin).order('fecha')]);
   const venta = id => (vs || []).find(v => v.id === id);
-  const paths = (en || []).map(e => e.firma).filter(Boolean);
+  const paths = (en || []).map(e => e.firma).concat((vp || []).map(v => v.firma)).filter(Boolean);
   const { data: urls } = paths.length ? await sb.storage.from('evidencias').createSignedUrls(paths, 3600) : { data: [] };
   const urlDe = p => (urls || []).find(u => u.path === p)?.signedUrl;
+  const imgF = p => urlDe(p) ? `<br><img src="${esc(urlDe(p))}" alt="firma" style="height:28px;max-width:90px">` : '';
   const idRel = S.productos.find(p => p.nombre === 'Relleno garrafón')?.id, idNue = S.productos.find(p => p.nombre === 'Garrafón nuevo')?.id;
   const cant = (v, pid) => (v.venta_detalle || []).filter(d => d.producto_id === pid).reduce((s, d) => s + num(d.cantidad), 0);
   // renglones: entregas de Javier + ventas en planta que no vienen de una entrega
@@ -702,7 +718,7 @@ async function estadoCuenta(clienteId, mes) {
       recibio: esc(e.recibio || '') + (urlDe(e.firma) ? `<br><img src="${esc(urlDe(e.firma))}" alt="firma" style="height:28px;max-width:90px">` : ''),
       imp: v && !v.cancelada ? num(v.total) : 0, fp: v?.forma_pago }; })
     .concat((vp || []).filter(v => !ids.includes(v.id)).map(v => ({ fecha: v.fecha, folio: 'Ticket #' + v.id, llenos: cant(v, idRel), nuevos: cant(v, idNue), vacios: null,
-      recibio: 'Recogió en planta', imp: num(v.total), fp: v.forma_pago })))
+      recibio: (v.recibio ? esc(v.recibio) + '<br><small>en planta</small>' : 'Recogió en planta') + imgF(v.firma), imp: num(v.total), fp: v.forma_pago })))
     .sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
   const tL = filas.reduce((s, x) => s + x.llenos, 0), tN = filas.reduce((s, x) => s + x.nuevos, 0), tV = filas.reduce((s, x) => s + num(x.vacios), 0);
   const tImp = filas.reduce((s, x) => s + x.imp, 0), tCred = filas.filter(x => x.fp === 'credito').reduce((s, x) => s + x.imp, 0);

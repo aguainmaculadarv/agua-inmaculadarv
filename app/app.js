@@ -339,20 +339,46 @@ const VISTAS_PLANTA = {
     document.querySelectorAll('#pay button').forEach(b => b.onclick = () => { S.pago = b.dataset.p; pintar(); });
     document.getElementById('v-cli').onchange = e => { S.clienteId = e.target.value || null; if (!S.clienteId && S.pago === 'credito') S.pago = 'efectivo'; pintar(); };
     document.getElementById('v-limpiar').onclick = () => { S.cart = {}; S.clienteId = null; S.pago = 'efectivo'; S.pagaCon = null; S.ultimoCambio = null; VISTAS_PLANTA.vender(main); };
+    const pedirFirma = c => new Promise(res => {
+      const sug = c.quien_recibe && c.quien_recibe.toLowerCase() !== 'encargado' ? c.quien_recibe : '';
+      modal(`<h2>Firma de recibido</h2><p class="mut">${esc(c.nombre)} · a crédito · <b>${document.getElementById('v-tot').textContent}</b></p>
+        <div class="field"><label>Nombre de quien recoge</label><input type="text" id="fv-n" value="${esc(sug)}"></div>
+        ${padFirma('fv-f')}
+        <div class="row"><button class="btn ghost" id="fv-x">Cancelar</button><span class="sp"></span><button class="btn ok" id="fv-ok">Firmar y registrar</button></div>`, (box, close) => {
+        const f = activarFirma('fv-f');
+        box.parentElement.addEventListener('click', ev => { if (ev.target === box.parentElement) res(null); });
+        box.querySelector('#fv-x').onclick = () => { close(); res(null); };
+        box.querySelector('#fv-ok').onclick = ev => busy(ev.currentTarget, async () => {
+          const n = box.querySelector('#fv-n').value.trim(); if (!n) throw new Error('Escribe el nombre de quien recoge');
+          if (f.vacia()) throw new Error('Falta la firma');
+          const path = await f.subir('ventas'); close(); res({ recibio: n, firma: path });
+        });
+      });
+    });
     document.getElementById('v-cobrar').onclick = e => busy(e.currentTarget, async () => {
       const items = Object.entries(S.cart).filter(([, q]) => q > 0).map(([id, q]) => ({ producto_id: Number(id), cantidad: q }));
       if (!items.length) throw new Error('Agrega al menos un producto');
+      let firmaV = null;
+      if (S.pago === 'credito') {
+        firmaV = await pedirFirma(S.clientes.find(c => c.id == S.clienteId) || {});
+        if (!firmaV) return;
+      }
       const totalV = prods.filter(p => S.cart[p.id]).reduce((s, p) => s + precioDe(p) * S.cart[p.id], 0);
       const pagaCon = S.pago === 'efectivo' && S.pagaCon != null ? num(S.pagaCon) : null;
       if (pagaCon != null && pagaCon < totalV) throw new Error('Con lo que paga no alcanza: faltan ' + money(totalV - pagaCon));
       const { data: ventaId, error } = await sb.rpc('registrar_venta', { p_turno_id: S.turno.id, p_forma_pago: S.pago, p_items: items,
         p_cliente_id: S.clienteId ? Number(S.clienteId) : null, p_canal: S.clienteId && S.clientes.find(c => c.id == S.clienteId)?.tipo === 'empresa' ? 'empresa' : 'planta' });
       if (error) throw error;
+      if (firmaV) {
+        const { error: ef } = await sb.rpc('firmar_venta', { p_venta_id: ventaId, p_recibio: firmaV.recibio, p_firma: firmaV.firma });
+        if (ef) { toast('La venta quedó guardada, pero la firma no: ' + errMsg(ef), 'bad'); firmaV = null; }
+      }
       toast('Venta registrada · ' + document.getElementById('v-tot').textContent, 'ok');
       S.cart = {}; S.clienteId = null; S.pago = 'efectivo'; S.pagaCon = null;
       S.ultimoCambio = pagaCon != null ? { paga: pagaCon, cambio: pagaCon - totalV } : null;
       await VISTAS_PLANTA.vender(main);
-      mostrarTicket(ventaId, true);
+      await mostrarTicket(ventaId, true);
+      if (firmaV) mostrarNotaVenta(ventaId).catch(err => toast('No se pudo armar la nota: ' + errMsg(err), 'bad'));
     });
     const ti = document.getElementById('v-tick');
     ti.checked = impresionActiva();
@@ -1352,9 +1378,12 @@ async function mostrarTicket(ventaId, recienCobrada) {
     modal(`<h2>Ticket #${v.id}</h2>
       <pre style="background:#fff;border:1px dashed var(--line);border-radius:10px;padding:14px;font:14px/1.45 ui-monospace,Menlo,Consolas,monospace;overflow-x:auto;max-width:360px;margin:0 auto"><img src="logo.jpg" alt="Agua Inmaculada" style="display:block;width:80%;margin:0 auto 6px;filter:grayscale(1) contrast(1.4)">${L.map(l => l.b ? `<b${l.big ? ' style="font-size:16px"' : ''}>${esc(l.t)}</b>` : esc(l.t)).join('\n')}${qrImg ? `<img src="${qrImg}" alt="QR para pedir a domicilio" style="display:block;width:150px;margin:8px auto 0">` : ''}</pre>
       <div class="row" style="margin-top:14px"><button class="btn ghost" data-close>Cerrar</button><span class="sp"></span>
-        <button class="btn" id="tk-p">${recienCobrada ? 'Imprimir' : 'Reimprimir'}</button></div>
+        ${v.firma ? '<button class="btn sec" id="tk-n">Nota firmada</button>' : ''}<button class="btn" id="tk-p">${recienCobrada ? 'Imprimir' : 'Reimprimir'}</button></div>
       <p class="mut small">Para imprimir, la tableta Android necesita la app gratuita RawBT vinculada a la impresora Bluetooth. ${recienCobrada && v.forma_pago === 'efectivo' ? 'Al imprimir se abre el cajón.' : 'La reimpresión no abre el cajón.'}</p>`,
-      (box, close) => box.querySelector('#tk-p').onclick = () => { enviarImpresora(escpos(L, abrir, logo, qr)); close(); });
+      (box, close) => {
+        box.querySelector('#tk-p').onclick = () => { enviarImpresora(escpos(L, abrir, logo, qr)); close(); };
+        const bn = box.querySelector('#tk-n'); if (bn) bn.onclick = () => busy(bn, async () => { await mostrarNotaVenta(v.id); close(); });
+      });
   } catch (e) { toast(errMsg(e), 'bad'); }
 }
 
