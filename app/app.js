@@ -1254,7 +1254,37 @@ function lineasTicket(v) {
   L.push({ t: sep });
   L.push({ t: centro('Gracias por su compra') });
   L.push({ t: centro('Este ticket no es factura') });
+  L.push({ t: sep });
+  L.push({ t: centro('PIDE A DOMICILIO'), b: true });
+  L.push({ t: centro('Escanea el QR y haz tu pedido aqui') });
   return L;
+}
+// QR de la página de pedidos, para el final del ticket
+const URL_PEDIDOS = () => new URL('pedir.html', location.href).href;
+function canvasQR(px) {
+  if (typeof qrcode === 'undefined') return null;
+  const q = qrcode(0, 'M'); q.addData(URL_PEDIDOS()); q.make();
+  const n = q.getModuleCount(), m = 2, esc = Math.max(1, Math.floor(px / (n + m * 2)));
+  const w = Math.ceil(((n + m * 2) * esc) / 8) * 8;
+  const c = document.createElement('canvas'); c.width = w; c.height = (n + m * 2) * esc;
+  const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.fillStyle = '#000';
+  for (let r = 0; r < n; r++) for (let k = 0; k < n; k++) if (q.isDark(r, k)) g.fillRect((k + m) * esc, (r + m) * esc, esc, esc);
+  return c;
+}
+let _qrRaster = null;
+function qrRaster() {
+  if (_qrRaster) return _qrRaster;
+  const ancho = (cfg('ticket_ancho') || 32) >= 48 ? 576 : 384;
+  const c = canvasQR(Math.round(ancho * 0.6)); if (!c) return null;
+  const w = c.width, h = c.height, px = c.getContext('2d').getImageData(0, 0, w, h).data, bw = w / 8;
+  const out = [0x1B, 0x61, 0x01, 0x1D, 0x76, 0x30, 0x00, bw & 0xFF, bw >> 8, h & 0xFF, h >> 8];
+  for (let y = 0; y < h; y++) for (let xb = 0; xb < bw; xb++) {
+    let byte = 0;
+    for (let bit = 0; bit < 8; bit++) { const i = (y * w + xb * 8 + bit) * 4; if (px[i] < 128) byte |= 0x80 >> bit; }
+    out.push(byte);
+  }
+  out.push(0x0A, 0x1B, 0x61, 0x00);
+  return (_qrRaster = out);
 }
 let _logoRaster = null;
 async function logoRaster() {
@@ -1279,7 +1309,7 @@ async function logoRaster() {
   out.push(0x0A, 0x1B, 0x61, 0x00);
   return (_logoRaster = out);
 }
-function escpos(L, abrirCajon, logo) {
+function escpos(L, abrirCajon, logo, qr) {
   const B = [0x1B, 0x40]; // inicializar
   if (logo) B.push(...logo);
   const txt = s => { for (const ch of s) B.push(ch.charCodeAt(0) & 0x7F); };
@@ -1288,6 +1318,7 @@ function escpos(L, abrirCajon, logo) {
     B.push(0x1D, 0x21, l.big ? 0x01 : 0x00);  // doble alto
     txt(l.t); B.push(0x0A);
   }
+  if (qr) B.push(...qr);
   B.push(0x1D, 0x21, 0x00, 0x1B, 0x45, 0x00, 0x0A, 0x0A, 0x0A);
   B.push(0x1D, 0x56, 0x42, 0x00);             // corte de papel (si la impresora lo tiene)
   if (abrirCajon) B.push(0x1B, 0x70, 0x00, 0x19, 0xFA); // abrir cajón (pin 2)
@@ -1304,13 +1335,15 @@ async function mostrarTicket(ventaId, recienCobrada) {
     const L = lineasTicket(v);
     const abrir = recienCobrada && v.forma_pago === 'efectivo';
     const logo = await logoRaster().catch(() => null);
-    if (recienCobrada && impresionActiva()) { enviarImpresora(escpos(L, abrir, logo)); return; }
+    let qr = null; try { qr = qrRaster(); } catch { qr = null; }
+    if (recienCobrada && impresionActiva()) { enviarImpresora(escpos(L, abrir, logo, qr)); return; }
+    const qrImg = (() => { try { return canvasQR(220)?.toDataURL(); } catch { return null; } })();
     modal(`<h2>Ticket #${v.id}</h2>
-      <pre style="background:#fff;border:1px dashed var(--line);border-radius:10px;padding:14px;font:14px/1.45 ui-monospace,Menlo,Consolas,monospace;overflow-x:auto;max-width:360px;margin:0 auto"><img src="logo.jpg" alt="Agua Inmaculada" style="display:block;width:80%;margin:0 auto 6px;filter:grayscale(1) contrast(1.4)">${L.map(l => l.b ? `<b${l.big ? ' style="font-size:16px"' : ''}>${esc(l.t)}</b>` : esc(l.t)).join('\n')}</pre>
+      <pre style="background:#fff;border:1px dashed var(--line);border-radius:10px;padding:14px;font:14px/1.45 ui-monospace,Menlo,Consolas,monospace;overflow-x:auto;max-width:360px;margin:0 auto"><img src="logo.jpg" alt="Agua Inmaculada" style="display:block;width:80%;margin:0 auto 6px;filter:grayscale(1) contrast(1.4)">${L.map(l => l.b ? `<b${l.big ? ' style="font-size:16px"' : ''}>${esc(l.t)}</b>` : esc(l.t)).join('\n')}${qrImg ? `<img src="${qrImg}" alt="QR para pedir a domicilio" style="display:block;width:150px;margin:8px auto 0">` : ''}</pre>
       <div class="row" style="margin-top:14px"><button class="btn ghost" data-close>Cerrar</button><span class="sp"></span>
         <button class="btn" id="tk-p">${recienCobrada ? 'Imprimir' : 'Reimprimir'}</button></div>
       <p class="mut small">Para imprimir, la tableta Android necesita la app gratuita RawBT vinculada a la impresora Bluetooth. ${recienCobrada && v.forma_pago === 'efectivo' ? 'Al imprimir se abre el cajón.' : 'La reimpresión no abre el cajón.'}</p>`,
-      (box, close) => box.querySelector('#tk-p').onclick = () => { enviarImpresora(escpos(L, abrir, logo)); close(); });
+      (box, close) => box.querySelector('#tk-p').onclick = () => { enviarImpresora(escpos(L, abrir, logo, qr)); close(); });
   } catch (e) { toast(errMsg(e), 'bad'); }
 }
 
