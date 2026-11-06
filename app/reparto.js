@@ -185,11 +185,12 @@ const VISTAS_REPARTO = {
         <p class="mut small">Si la empresa es de crédito, la entrega queda por cobrar. Si es de contado, cobra al entregar.</p>
       </div>
       <div class="card"><h2>Entregas de hoy</h2>
-        <table><thead><tr><th>Empresa</th><th class="n">Llenos</th><th class="n">Vacíos</th></tr></thead><tbody>
-        ${(hoy || []).map(e => `<tr><td><b>${esc(S.clientes.find(c => c.id === e.cliente_id)?.nombre || '')}</b><br><span class="mut small">${fmtHora(e.fecha)} · recibió ${esc(e.recibio || '')}</span></td><td class="n">${e.llenos}${num(e.nuevos) ? `<br><span class="mut small">+${e.nuevos} nuevos</span>` : ''}</td><td class="n">${e.vacios}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">Aún no hay entregas</td></tr>'}
+        <table><thead><tr><th>Empresa</th><th class="n">Llenos</th><th class="n">Vacíos</th><th></th></tr></thead><tbody>
+        ${(hoy || []).map(e => `<tr><td><b>${esc(S.clientes.find(c => c.id === e.cliente_id)?.nombre || '')}</b><br><span class="mut small">${fmtHora(e.fecha)} · recibió ${esc(e.recibio || '')}</span></td><td class="n">${e.llenos}${num(e.nuevos) ? `<br><span class="mut small">+${e.nuevos} nuevos</span>` : ''}</td><td class="n">${e.vacios}</td><td><button class="btn sm sec" data-nota="${e.id}">Nota</button></td></tr>`).join('') || '<tr><td colspan="4" class="empty">Aún no hay entregas</td></tr>'}
         </tbody></table></div>
     </div>`;
     const firma = activarFirma('re-f');
+    main.querySelectorAll('[data-nota]').forEach(b => b.onclick = () => busy(b, () => mostrarNotaEntrega(Number(b.dataset.nota))));
     let fpEnt = null;
     const pintarPago = c => {
       const box = document.getElementById('re-pago');
@@ -223,9 +224,10 @@ const VISTAS_REPARTO = {
       if (!val('re-r')) throw new Error('Escribe el nombre de quien recibe');
       if (firma.vacia()) throw new Error('Falta la firma de recibido');
       const f = await firma.subir('entregas');
-      const { error } = await sb.rpc('registrar_entrega_empresa', { p_turno_id: S.turno.id, p_cliente_id: Number(cli), p_llenos: l, p_vacios: v, p_recibio: val('re-r'), p_firma: f, p_notas: val('re-n') || null, p_forma_pago: fpEnt, p_nuevos: g });
+      const { data: eid, error } = await sb.rpc('registrar_entrega_empresa', { p_turno_id: S.turno.id, p_cliente_id: Number(cli), p_llenos: l, p_vacios: v, p_recibio: val('re-r'), p_firma: f, p_notas: val('re-n') || null, p_forma_pago: fpEnt, p_nuevos: g });
       if (error) throw error;
-      toast('Entrega guardada', 'ok'); VISTAS_REPARTO.r_entregar(main);
+      toast('Entrega guardada', 'ok'); await VISTAS_REPARTO.r_entregar(main);
+      mostrarNotaEntrega(eid).catch(err => toast('No se pudo armar la nota: ' + err.message, 'bad'));
     });
   },
 
@@ -598,6 +600,139 @@ async function ticketPrestamo(p, nuevo) {
 }
 
 /* =====================================================================
+   NOTA DE ENTREGA DIGITAL (empresas) Y ESTADO DE CUENTA MENSUAL
+   ===================================================================== */
+const folioE = id => 'E-' + String(id).padStart(5, '0');
+const cargarImg = src => new Promise(res => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = src; });
+async function urlFirma(path) {
+  if (!path) return null;
+  try { const { data, error } = await sb.storage.from('evidencias').download(path); return error || !data ? null : URL.createObjectURL(data); } catch { return null; }
+}
+async function datosEntrega(id) {
+  const { data: e, error } = await sb.from('entregas').select('*').eq('id', id).single();
+  if (error) throw error;
+  const [{ data: v }, { data: c }] = await Promise.all([
+    e.venta_id ? sb.from('ventas').select('id,total,forma_pago,cancelada,venta_detalle(cantidad,producto_id,precio_unitario)').eq('id', e.venta_id).maybeSingle() : Promise.resolve({ data: null }),
+    sb.from('clientes').select('*').eq('id', e.cliente_id).maybeSingle()]);
+  return { e, v, c: c || S.clientes.find(x => x.id === e.cliente_id) || {} };
+}
+const txtCondicion = (v, c) => !v ? '—' : v.forma_pago === 'credito' ? (c.dias_credito ? `Crédito ${c.dias_credito} días` : 'Crédito') : 'Contado · ' + (v.forma_pago === 'transferencia' ? 'Transferencia' : 'Efectivo');
+
+async function canvasNota({ e, v, c }) {
+  const W = 720, P = 44;
+  const [logo, firma] = await Promise.all([cargarImg('logo.jpg'), urlFirma(e.firma).then(u => u ? cargarImg(u) : null)]);
+  const det = v?.venta_detalle || [];
+  const idRel = S.productos.find(p => p.nombre === 'Relleno garrafón')?.id, idNue = S.productos.find(p => p.nombre === 'Garrafón nuevo')?.id;
+  const pu = pid => num(det.find(d => d.producto_id === pid)?.precio_unitario);
+  const tmp = document.createElement('canvas'); tmp.width = W; tmp.height = 2200;
+  const g = tmp.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, W, tmp.height); g.fillStyle = '#10323D'; g.textBaseline = 'alphabetic';
+  const F = (px, b) => g.font = `${b ? 'bold ' : ''}${px}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
+  let y = P;
+  const txt = (t, x, al = 'left') => { g.textAlign = al; g.fillText(t, x, y); };
+  const linea = () => { y += 18; g.fillStyle = '#C9D6DA'; g.fillRect(P, y, W - 2 * P, 2); g.fillStyle = '#10323D'; y += 22; };
+  const par = (a, b, bold) => { F(26, bold); txt(a, P); txt(b, W - P, 'right'); y += 40; };
+  if (logo) { const lw = 320, lh = logo.height * lw / logo.width; g.drawImage(logo, (W - lw) / 2, y, lw, lh); y += lh + 14; }
+  y += 30; F(24); txt('Real del Valle', W / 2, 'center'); y += 52;
+  F(36, true); txt('NOTA DE ENTREGA', W / 2, 'center'); y += 44;
+  F(24); txt(`Folio ${folioE(e.id)}  ·  ${new Date(e.fecha).toLocaleString('es-MX', { timeZone: CFG.ZONA, day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`, W / 2, 'center'); y += 10;
+  linea(); y += 10;
+  F(22); g.fillStyle = '#5B7680'; txt('CLIENTE', P); y += 36; g.fillStyle = '#10323D';
+  F(32, true); txt(c.nombre || '', P); y += 30;
+  linea(); y += 14;
+  if (num(e.llenos)) par(`Garrafones llenos  ${e.llenos}${pu(idRel) ? ' × ' + money(pu(idRel)) : ''}`, pu(idRel) ? money(e.llenos * pu(idRel)) : '');
+  if (num(e.nuevos)) par(`Garrafones nuevos  ${e.nuevos}${pu(idNue) ? ' × ' + money(pu(idNue)) : ''}`, pu(idNue) ? money(e.nuevos * pu(idNue)) : '');
+  par('Vacíos recogidos', String(e.vacios || 0));
+  if (v && !v.cancelada) { y += 6; F(34, true); txt('TOTAL', P); txt(money(v.total), W - P, 'right'); y += 44; }
+  F(24); txt(txtCondicion(v, c), P); y += 10;
+  if (e.notas) { y += 30; F(22); txt('Notas: ' + e.notas, P); }
+  linea(); y += 6;
+  if (firma) { const bw = W - 2 * P, bh = 210, k = Math.min(bw / firma.width, bh / firma.height); g.drawImage(firma, P + (bw - firma.width * k) / 2, y, firma.width * k, firma.height * k); y += bh; }
+  else { y += 60; F(22); g.fillStyle = '#5B7680'; txt('(firma registrada en sistema)', W / 2, 'center'); g.fillStyle = '#10323D'; y += 30; }
+  g.fillRect(P + 80, y, W - 2 * P - 160, 2); y += 36;
+  F(26, true); txt('Recibió: ' + (e.recibio || ''), W / 2, 'center'); y += 50;
+  F(20); g.fillStyle = '#5B7680'; txt('Agua Inmaculada Real del Valle · WhatsApp 33 3033 4510', W / 2, 'center'); y += P;
+  const out = document.createElement('canvas'); out.width = W; out.height = y; out.getContext('2d').drawImage(tmp, 0, 0);
+  return out;
+}
+
+async function mostrarNotaEntrega(id) {
+  const d = await datosEntrega(id);
+  const cv = await canvasNota(d);
+  const blob = await new Promise(r => cv.toBlob(r, 'image/png'));
+  const nombre = `Nota_${folioE(d.e.id)}_${(d.c.nombre || 'empresa').normalize('NFD').replace(/[^\w]+/g, '_')}.png`;
+  const file = new File([blob], nombre, { type: 'image/png' });
+  const url = URL.createObjectURL(blob);
+  modal(`<h2>Nota ${folioE(d.e.id)}</h2><p class="mut">${esc(d.c.nombre || '')} · recibió ${esc(d.e.recibio || '')}</p>
+    <img src="${url}" alt="Nota de entrega" style="display:block;width:100%;max-width:360px;margin:0 auto;border:1px solid var(--line);border-radius:10px">
+    <div class="row" style="margin-top:14px"><button class="btn ghost" data-close>Cerrar</button><span class="sp"></span><button class="btn sec" id="nt-d">Descargar</button><button class="btn ok" id="nt-s">Enviar por WhatsApp</button></div>
+    <p class="mut small">Se abre WhatsApp con la imagen: elige el grupo o el contacto de la empresa.</p>`, box => {
+    const bajar = () => { const a = document.createElement('a'); a.href = url; a.download = nombre; document.body.appendChild(a); a.click(); a.remove(); };
+    box.querySelector('#nt-d').onclick = bajar;
+    box.querySelector('#nt-s').onclick = async () => {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file], title: 'Nota de entrega ' + folioE(d.e.id) }); return; }
+        catch (err) { if (err && err.name === 'AbortError') return; }
+      }
+      bajar(); toast('Nota descargada. Adjúntala en WhatsApp.', 'ok');
+    };
+  });
+}
+
+function mesSiguiente(mes) { const [y, m] = mes.split('-').map(Number); return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`; }
+async function estadoCuenta(clienteId, mes) {
+  const ini = inicioMX(mes + '-01'), fin = inicioMX(mesSiguiente(mes) + '-01');
+  const c = S.clientes.find(x => x.id == clienteId) || (await sb.from('clientes').select('*').eq('id', clienteId).single()).data;
+  const [{ data: en, error }, { data: co }, { data: cxc }] = await Promise.all([
+    sb.from('entregas').select('*').eq('cliente_id', clienteId).gte('fecha', ini).lt('fecha', fin).order('fecha'),
+    sb.from('cobros').select('*').eq('cliente_id', clienteId).gte('fecha', ini).lt('fecha', fin).order('fecha'),
+    sb.rpc('cuentas_por_cobrar')]);
+  if (error) throw error;
+  const ids = (en || []).map(e => e.venta_id).filter(Boolean);
+  const { data: vs } = ids.length ? await sb.from('ventas').select('id,total,forma_pago,cancelada').in('id', ids) : { data: [] };
+  const venta = id => (vs || []).find(v => v.id === id);
+  const paths = (en || []).map(e => e.firma).filter(Boolean);
+  const { data: urls } = paths.length ? await sb.storage.from('evidencias').createSignedUrls(paths, 3600) : { data: [] };
+  const urlDe = p => (urls || []).find(u => u.path === p)?.signedUrl;
+  const imp = e => { const v = venta(e.venta_id); return v && !v.cancelada ? num(v.total) : 0; };
+  const tL = (en || []).reduce((s, e) => s + num(e.llenos), 0), tN = (en || []).reduce((s, e) => s + num(e.nuevos), 0), tV = (en || []).reduce((s, e) => s + num(e.vacios), 0);
+  const tImp = (en || []).reduce((s, e) => s + imp(e), 0), tCred = (en || []).filter(e => venta(e.venta_id)?.forma_pago === 'credito').reduce((s, e) => s + imp(e), 0);
+  const tPag = (co || []).reduce((s, p) => s + num(p.monto), 0);
+  const saldo = num((cxc || []).find(x => x.cliente_id == clienteId)?.saldo);
+  const nomMes = (m => m.charAt(0).toUpperCase() + m.slice(1))(new Date(mes + '-15T12:00:00').toLocaleDateString('es-MX', { month: 'long', year: 'numeric' }).replace(' de ', ' '));
+  const dm = t => new Date(t).toLocaleDateString('es-MX', { timeZone: CFG.ZONA, day: '2-digit', month: '2-digit' });
+  const f = t => new Date(t).toLocaleString('es-MX', { timeZone: CFG.ZONA, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const doc = `<div class="ec">
+    <div style="text-align:center"><img src="logo.jpg" alt="" style="width:220px"><div>Real del Valle</div>
+      <h2 style="margin:10px 0 2px">ESTADO DE CUENTA</h2><div>${esc(nomMes)}</div></div>
+    <p><b style="font-size:18px">${esc(c.nombre)}</b><br>${esc(txtCredito(c))}${c.contacto ? ' · ' + esc(c.contacto) : ''}</p>
+    <div style="overflow-x:auto"><table class="ect"><thead><tr><th>Fecha</th><th>Llenos</th><th>Nuevos</th><th>Vacíos</th><th>Recibió</th><th style="text-align:right">Importe</th></tr></thead><tbody>
+    ${(en || []).map(e => `<tr><td>${dm(e.fecha)}<br><small style="white-space:nowrap;color:#5B7680">${folioE(e.id)}</small></td><td>${e.llenos}</td><td>${num(e.nuevos) || ''}</td><td>${e.vacios}</td>
+      <td>${esc(e.recibio || '')}${urlDe(e.firma) ? `<br><img src="${esc(urlDe(e.firma))}" alt="firma" style="height:28px;max-width:90px">` : ''}</td><td style="text-align:right">${money(imp(e))}${venta(e.venta_id)?.forma_pago && venta(e.venta_id).forma_pago !== 'credito' ? '<br><small>pagado</small>' : ''}</td></tr>`).join('') || '<tr><td colspan="6" style="text-align:center">Sin entregas en el mes</td></tr>'}
+    </tbody><tfoot><tr><th>Total</th><th>${tL}</th><th>${tN || ''}</th><th>${tV}</th><th></th><th style="text-align:right">${money(tImp)}</th></tr></tfoot></table></div>
+    ${(co || []).length ? `<h3>Pagos recibidos en el mes</h3><table class="ect"><tbody>${co.map(p => `<tr><td>${f(p.fecha)}</td><td>${esc(p.forma_pago)}${p.notas ? ' · ' + esc(p.notas) : ''}</td><td style="text-align:right">${money(p.monto)}</td></tr>`).join('')}</tbody></table>` : ''}
+    <table class="ect" style="margin-top:12px"><tbody>
+      <tr><td>Entregas a crédito del mes</td><td style="text-align:right">${money(tCred)}</td></tr>
+      <tr><td>Pagos del mes</td><td style="text-align:right">${money(tPag)}</td></tr>
+      <tr><td><b>Saldo pendiente al ${new Date().toLocaleDateString('es-MX', { timeZone: CFG.ZONA })}</b></td><td style="text-align:right"><b>${money(saldo)}</b></td></tr></tbody></table>
+    <p style="text-align:center;color:#5B7680;font-size:12px;margin-top:14px">Agua Inmaculada Real del Valle · WhatsApp 33 3033 4510</p></div>`;
+  const css = `.ec{font:14px/1.4 system-ui,sans-serif;color:#10323D}.ect{width:100%;border-collapse:collapse;margin-top:8px}.ect th,.ect td{border-bottom:1px solid #dde6e9;padding:5px 3px;text-align:left;font-size:13px;vertical-align:top}.ect thead th{background:#eef4f6}`;
+  const tel = soloDig(c.telefono).slice(-10);
+  const msg = `Hola, le compartimos el estado de cuenta de ${c.nombre} de ${nomMes}: ${tL + tN} garrafones, ${money(tImp)}. Saldo pendiente: ${money(saldo)}. Agua Inmaculada Real del Valle.`;
+  modal(`<style>${css}</style>${doc}
+    <div class="row" style="margin-top:14px"><button class="btn ghost" data-close>Cerrar</button><span class="sp"></span>
+      ${tel.length === 10 ? `<a class="btn sec" href="https://wa.me/52${tel}?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">Mensaje WhatsApp</a>` : ''}
+      <button class="btn" id="ec-p">Guardar PDF</button></div>
+    <p class="mut small">"Guardar PDF" abre la impresión: elige "Guardar como PDF" y luego mándalo por WhatsApp.</p>`, box => {
+    box.querySelector('#ec-p').addEventListener('click', () => {
+      const w = window.open('', '_blank');
+      if (!w) return toast('Permite ventanas emergentes para guardar el PDF', 'bad');
+      w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Estado de cuenta ${esc(c.nombre)} ${esc(nomMes)}</title><base href="${location.href}"><style>body{margin:24px}${css}@page{size:letter;margin:14mm}</style></head><body>${doc}<script>window.onload=()=>setTimeout(()=>print(),400)<\/script></body></html>`);
+      w.document.close();
+    });
+  });
+}
+
+/* =====================================================================
    PANEL DE DUEÑOS: Reparto, Pedidos y Préstamos
    ===================================================================== */
 VISTAS_DUENO.pedidosD = vistaPedidos;
@@ -638,7 +773,7 @@ VISTAS_DUENO.reparto = async function (main) {
       ${Object.entries(porEmp).map(([k, v]) => `<tr><td>${esc(cli(Number(k))?.nombre || '')}</td><td class="n">${v.n}</td><td class="n">${v.llenos}</td><td class="n">${v.vacios}</td><td class="n">${fmtN(cli(Number(k))?.garrafones_prestados)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">Sin entregas</td></tr>'}
     </tbody></table></div></div>
     <div class="card"><h2>Entregas con firma</h2><div class="tw"><table><tbody>
-      ${(en || []).slice(0, 40).map(e => `<tr><td>${fmtFecha(e.fecha)}</td><td><b>${esc(cli(e.cliente_id)?.nombre || '')}</b><br><span class="mut small">Recibió: ${esc(e.recibio || '')}</span></td><td class="n">${e.llenos} / ${e.vacios}</td><td>${e.firma ? `<button class="btn sm sec" data-foto="${esc(e.firma)}">Firma</button>` : ''}</td></tr>`).join('') || '<tr><td class="empty">Sin entregas</td></tr>'}
+      ${(en || []).slice(0, 40).map(e => `<tr><td>${fmtFecha(e.fecha)}</td><td><b>${esc(cli(e.cliente_id)?.nombre || '')}</b><br><span class="mut small">Recibió: ${esc(e.recibio || '')}</span></td><td class="n">${e.llenos} / ${e.vacios}</td><td style="white-space:nowrap">${e.firma ? `<button class="btn sm sec" data-foto="${esc(e.firma)}">Firma</button> ` : ''}<button class="btn sm ghost" data-nota="${e.id}">Nota</button></td></tr>`).join('') || '<tr><td class="empty">Sin entregas</td></tr>'}
     </tbody></table></div></div>
   </div>`;
   // ---------- Domicilio Real del Valle ----------
@@ -669,6 +804,7 @@ VISTAS_DUENO.reparto = async function (main) {
   </div>`);
   per.bind();
   main.querySelectorAll('[data-foto]').forEach(b => b.onclick = () => verFoto(b.dataset.foto));
+  main.querySelectorAll('[data-nota]').forEach(b => b.onclick = () => busy(b, () => mostrarNotaEntrega(Number(b.dataset.nota))));
 };
 
 /* ---------------- inicio ---------------- */

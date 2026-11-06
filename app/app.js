@@ -735,14 +735,24 @@ const VISTAS_DUENO = {
       <div class="kpi"><div class="l">Te deben</div><div class="v">${money0(tot)}</div><div class="s">${data.length} clientes</div></div>
       <div class="kpi"><div class="l">Vencido</div><div class="v" style="color:${ven > 0 ? 'var(--bad)' : 'var(--ok)'}">${money0(ven)}</div><div class="s">${data.filter(c => num(c.vencido) > 0).length} clientes</div></div>
       <div class="kpi"><div class="l">Por vencer</div><div class="v">${money0(tot - ven)}</div></div></div>
+    <div class="card" style="margin-bottom:16px"><h2>Estado de cuenta mensual</h2>
+      <div class="grid g3" style="align-items:end">
+        <div class="field"><label>Empresa</label><select id="ec-c"><option value="">— Elige —</option>${S.clientes.filter(c => c.tipo === 'empresa' || c.tipo === 'restaurante').map(c => `<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select></div>
+        <div class="field"><label>Mes</label><input type="month" id="ec-m" value="${fechaMX().slice(0, 7)}"></div>
+        <div class="field"><button class="btn" id="ec-b">Ver estado de cuenta</button></div></div>
+      <p class="mut small">Todas las entregas del mes con firma de quien recibió, pagos y saldo. Se guarda en PDF para mandarlo.</p></div>
     <div class="card"><h2>Cuentas por cobrar</h2><div class="tw"><table><thead><tr><th>Cliente</th><th>Crédito</th><th class="n">Debe</th><th class="n">Vencido</th><th></th></tr></thead><tbody>
       ${data.map(c => `<tr><td><b>${esc(c.nombre)}</b><br><span class="mut small">${esc(c.contacto || '')}${c.telefono ? ` · <a href="tel:${esc(c.telefono)}">${esc(c.telefono)}</a> · <a href="https://wa.me/52${esc(String(c.telefono).replace(/\D/g, '').slice(-10))}" target="_blank" rel="noopener">WhatsApp</a>` : ''}</span></td>
         <td>${esc(txtCredito(c))}<br><span class="mut small">desde ${fmtFecha(c.pendiente_desde)}</span></td>
         <td class="n"><b>${money(c.saldo)}</b></td>
         <td class="n">${num(c.vencido) > 0 ? `<span class="tag bad">${money(c.vencido)}</span><br><span class="mut small">${c.dias_vencido} días</span>` : '<span class="tag ok">Al corriente</span>'}</td>
-        <td><button class="btn sm cb-pago" data-id="${c.cliente_id}">Registrar pago</button> <button class="btn sm ghost cb-ver" data-id="${c.cliente_id}">Ver</button></td></tr>`).join('') || '<tr><td colspan="5" class="empty">Nadie te debe. Todo al corriente.</td></tr>'}
+        <td><button class="btn sm cb-pago" data-id="${c.cliente_id}">Registrar pago</button> <button class="btn sm ghost cb-ver" data-id="${c.cliente_id}">Ver</button> <button class="btn sm ghost cb-ec" data-id="${c.cliente_id}">Estado</button></td></tr>`).join('') || '<tr><td colspan="5" class="empty">Nadie te debe. Todo al corriente.</td></tr>'}
     </tbody></table></div><p class="mut small">Los pagos se aplican a las entregas más viejas primero.</p></div>`;
     const reload = () => VISTAS_DUENO.cobrar(main);
+    document.getElementById('ec-b').onclick = e => busy(e.currentTarget, async () => {
+      const id = val('ec-c'), m = val('ec-m'); if (!id) throw new Error('Elige la empresa'); if (!m) throw new Error('Elige el mes');
+      await estadoCuenta(Number(id), m);
+    });
     main.querySelectorAll('.cb-pago').forEach(b => b.onclick = () => {
       const c = data.find(x => x.cliente_id == b.dataset.id);
       modal(`<h2>Pago de ${esc(c.nombre)}</h2><p class="mut">Debe <b>${money(c.saldo)}</b>${num(c.vencido) > 0 ? ` · vencido ${money(c.vencido)}` : ''}</p>
@@ -761,6 +771,7 @@ const VISTAS_DUENO = {
           });
         });
     });
+    main.querySelectorAll('.cb-ec').forEach(b => b.onclick = () => busy(b, () => estadoCuenta(Number(b.dataset.id), fechaMX().slice(0, 7))));
     main.querySelectorAll('.cb-ver').forEach(b => b.onclick = async () => {
       const c = data.find(x => x.cliente_id == b.dataset.id);
       const [{ data: vs }, { data: cs }] = await Promise.all([
