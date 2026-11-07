@@ -90,7 +90,7 @@ async function renderReparto() {
   const t = S.turno.tipo;
   const tabs = t === 'camioneta'
     ? [['r_entregar', 'Entregar'], ['r_recargar', 'Cargar más'], ['r_cerrar', 'Cerrar turno']]
-    : [['r_pedidos', 'Pedidos'], ['r_vuelta', 'Nueva vuelta'], ['r_cerrar', 'Cerrar turno']];
+    : [['r_pedidos', 'Pedidos'], ['r_cerrar', 'Cerrar turno']];
   if (!tabs.some(x => x[0] === S.tab)) S.tab = tabs[0][0];
   const main = shell(tabs);
   if (t === 'moto') escucharPedidos();
@@ -247,14 +247,18 @@ const VISTAS_REPARTO = {
 
   /* ---------- MOTO: pedidos ---------- */
   async r_pedidos(main) {
-    const r = await resumenCarga();
     const { data: ps, error } = await sb.from('pedidos').select('*').eq('estado', 'pendiente').order('creado_en');
     if (error) throw error;
     const { data: hechos } = await sb.from('pedidos').select('*').eq('turno_id', S.turno.id).eq('estado', 'entregado').order('entregado_en', { ascending: false });
     const carga = {};
     (ps || []).forEach(p => { if (p.marcas) Object.entries(p.marcas).forEach(([m, q]) => carga[m] = (carga[m] || 0) + num(q)); else carga['Sin marca'] = (carga['Sin marca'] || 0) + num(p.cantidad); });
     const totPend = (ps || []).reduce((x, p) => x + num(p.cantidad), 0);
-    main.innerHTML = barraCarga(r) + `<div id="rp-avisos"></div>
+    const hh = hechos || [], sumF = f => hh.filter(p => p.forma_pago_real === f).reduce((x, p) => x + num(p.monto_cobrado), 0);
+    main.innerHTML = `<div class="grid g3" style="margin-bottom:16px">
+      <div class="kpi"><div class="l">Entregados hoy</div><div class="v">${hh.length}</div><div class="s">${fmtN(hh.reduce((x, p) => x + num(p.entregado_cantidad), 0))} garrafones</div></div>
+      <div class="kpi"><div class="l">Cobrado en efectivo</div><div class="v" style="font-size:22px">${money(sumF('efectivo'))}</div></div>
+      <div class="kpi"><div class="l">Por transferencia</div><div class="v" style="font-size:22px">${money(sumF('transferencia'))}</div></div></div>
+    <div id="rp-avisos"></div>
     <div class="card" style="padding:16px"><div class="row"><h2 style="margin:0">Llevar para los pendientes</h2><span class="sp"></span><span class="tag inf">${fmtN(totPend)} garrafones</span></div>
       <div style="font-size:18px;margin-top:8px">${Object.entries(carga).map(([m, q]) => `<b>${q}</b> ${esc(m)}`).join(' · ') || '<span class="mut">Nada pendiente</span>'}</div></div>
     <div class="row" style="margin-bottom:10px"><h2 style="margin:0">Pedidos pendientes (${(ps || []).length})</h2><span class="sp"></span><button class="btn sm sec" id="rp-ref">Actualizar</button></div>
@@ -313,16 +317,16 @@ const VISTAS_REPARTO = {
   async r_cerrar(main) {
     const r = await resumenCarga();
     const cam = S.turno.tipo === 'camioneta';
-    main.innerHTML = barraCarga(r) + `<div class="card" style="max-width:600px;margin:0 auto">
+    main.innerHTML = (cam ? barraCarga(r) : '') + `<div class="card" style="max-width:600px;margin:0 auto">
       <h1>Cerrar turno</h1>
-      <div class="field"><label>Garrafones llenos que regresas</label><input type="number" id="rz-l" inputmode="numeric"></div>
+      ${cam ? '<div class="field"><label>Garrafones llenos que regresas</label><input type="number" id="rz-l" inputmode="numeric"></div>' : ''}
       ${cam ? `<div class="field"><label>Garrafones vacíos que traes</label><input type="number" id="rz-v" inputmode="numeric"></div>
                <div class="field"><label>Efectivo que traes de empresas de contado (0 si ninguno)</label><input type="number" id="rz-e" inputmode="decimal" value="0"></div>`
             : `<div class="field"><label>Efectivo total que traes, contando la caja chica</label><input type="number" id="rz-e" inputmode="decimal"></div>`}
       <div class="field"><label>Notas</label><textarea id="rz-n"></textarea></div>
       <button class="btn big bad" id="rz-b">Cerrar turno</button></div>`;
     document.getElementById('rz-b').onclick = e => busy(e.currentTarget, async () => {
-      const l = nval('rz-l'); if (l === null) throw new Error('Escribe los llenos que regresas (0 si ninguno)');
+      const l = cam ? nval('rz-l') : r.quedan; if (l === null) throw new Error('Escribe los llenos que regresas (0 si ninguno)');
       const v = cam ? nval('rz-v') : 0; if (cam && v === null) throw new Error('Escribe los vacíos que traes');
       const ef = nval('rz-e'); if (ef === null) throw new Error('Escribe el efectivo que traes (0 si ninguno)');
       if (!(await confirmar('¿Cerrar el turno de reparto?', 'Sí, cerrar'))) return;
@@ -338,11 +342,11 @@ function arqueoReparto(main, x) {
   const al = (ok, txt) => `<div class="alert ${ok ? 'ok' : 'bad'}">${txt}</div>`;
   main.innerHTML = `<div class="card" style="max-width:600px;margin:0 auto">
     <h1>Turno cerrado</h1><p class="mut">Hora de salida: <b>${fmtHora(new Date())}</b></p>
-    <h3>Garrafones</h3><table><tbody>
+    ${x.tipo === 'camioneta' ? `<h3>Garrafones</h3><table><tbody>
       <tr><td>Cargados</td><td class="n">${fmtN(x.cargados)}</td></tr>
       <tr><td>Entregados</td><td class="n">${fmtN(x.entregados)}</td></tr>
       <tr><td>Llenos que regresan</td><td class="n">${fmtN(x.regreso_llenos)}</td></tr></tbody></table>
-    ${al(x.diferencia_llenos === 0, `Diferencia de llenos: ${x.diferencia_llenos > 0 ? '+' : ''}${x.diferencia_llenos}${x.diferencia_llenos === 0 ? ' · Cuadra' : x.diferencia_llenos < 0 ? ' · Faltan garrafones' : ' · Sobran garrafones'}`)}
+    ${al(x.diferencia_llenos === 0, `Diferencia de llenos: ${x.diferencia_llenos > 0 ? '+' : ''}${x.diferencia_llenos}${x.diferencia_llenos === 0 ? ' · Cuadra' : x.diferencia_llenos < 0 ? ' · Faltan garrafones' : ' · Sobran garrafones'}`)}` : `<p>Garrafones entregados: <b>${fmtN(x.entregados)}</b></p>`}
     ${x.tipo === 'camioneta' ? `<table><tbody><tr><td>Vacíos recogidos en empresas</td><td class="n">${fmtN(x.vacios_recogidos)}</td></tr><tr><td>Vacíos que trae</td><td class="n">${fmtN(x.regreso_vacios)}</td></tr></tbody></table>
       ${al(x.diferencia_vacios === 0, `Diferencia de vacíos: ${x.diferencia_vacios}${x.diferencia_vacios === 0 ? ' · Cuadra' : ''}`)}
       <h3>Cobros de contado</h3><table><tbody>
@@ -353,7 +357,6 @@ function arqueoReparto(main, x) {
     <h3>Dinero</h3><table><tbody>
       <tr><td>Caja chica inicial</td><td class="n">${money(x.caja_inicial)}</td></tr>
       <tr><td>Cobrado en efectivo</td><td class="n">${money(x.cobrado_efectivo)}</td></tr>
-      <tr><td>Pagado a ventanilla</td><td class="n">-${money(x.pagado_ventanilla)}</td></tr>
       <tr><td><b>Efectivo esperado</b></td><td class="n"><b>${money(x.efectivo_esperado)}</b></td></tr>
       <tr><td><b>Efectivo que trae</b></td><td class="n"><b>${money(x.efectivo_contado)}</b></td></tr>
       <tr><td>Cobrado por transferencia</td><td class="n">${money(x.cobrado_transferencia)}</td></tr></tbody></table>
