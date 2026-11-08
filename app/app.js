@@ -61,6 +61,12 @@ async function busy(btn, fn) {
   catch (e) { toast(errMsg(e), 'bad'); console.error(e); }
   finally { if (btn) { btn.disabled = false; btn.innerHTML = t; } }
 }
+async function domicilioPeriodo() {
+  const data = await fetchAll(() => sb.from('pedidos').select('id,nombre,marcas,cantidad,entregado_cantidad,monto_cobrado,forma_pago_real,entregado_en,asignado_a')
+    .eq('estado', 'entregado').gte('entregado_en', inicioMX(S.periodo.desde)).lt('entregado_en', inicioMX(addDays(S.periodo.hasta, 1))).order('entregado_en', { ascending: false }));
+  const t = f => data.filter(p => !f || p.forma_pago_real === f).reduce((x, p) => x + num(p.monto_cobrado), 0);
+  return { lista: data, n: data.length, garrafones: data.reduce((x, p) => x + num(p.entregado_cantidad), 0), total: t(), efectivo: t('efectivo'), transferencia: t('transferencia') };
+}
 async function fetchAll(build) {
   let out = [], from = 0;
   for (;;) {
@@ -657,22 +663,26 @@ const VISTAS_DUENO = {
     const per = selectorPeriodo(() => VISTAS_DUENO.resumen(main));
     main.innerHTML = per.html + '<div id="rs" class="empty">Calculando…</div>';
     per.bind();
-    const [{ data: r, error }, { data: fijos }, { data: mants }, { data: abiertos }] = await Promise.all([
+    const [{ data: r, error }, { data: fijos }, { data: mants }, { data: abiertos }, dom] = await Promise.all([
       sb.rpc('resumen_periodo', { p_desde: S.periodo.desde, p_hasta: S.periodo.hasta }),
       sb.from('gastos_fijos').select('*').eq('activo', true),
       sb.from('mantenimientos').select('*').eq('activo', true),
-      sb.from('turnos').select('id,abierto_en,usuario_id').eq('estado', 'abierto')
+      sb.from('turnos').select('id,abierto_en,usuario_id').eq('estado', 'abierto'),
+      domicilioPeriodo()
     ]);
     if (error) throw error;
     const dias = diasPeriodo();
+    const relleno = S.productos.find(p => p.nombre === 'Relleno garrafón');
+    const ventasTot = num(r.total) + dom.total, garrTot = num(r.garrafones) + dom.garrafones;
     const meta = (cfg('meta_diaria_garrafones') || 83) * dias;
     // costo de lo vendido
-    const costoVend = r.por_producto.reduce((s, x) => { const p = S.productos.find(pp => pp.nombre === x.producto); return s + (p ? costoProducto(p) * num(x.cantidad) : 0); }, 0);
+    const costoVend = r.por_producto.reduce((s, x) => { const p = S.productos.find(pp => pp.nombre === x.producto); return s + (p ? costoProducto(p) * num(x.cantidad) : 0); }, 0)
+      + (relleno ? costoProducto(relleno) * dom.garrafones : 0);
     const gastosOp = r.gastos.filter(g => !['insumo', 'garrafon', 'hielo'].includes(g.categoria)).reduce((s, g) => s + num(g.monto), 0);
     const fijosMes = (fijos || []).reduce((s, f) => s + num(f.monto_mensual), 0);
     const fijosPer = fijosMes * dias / 30.4;
-    const utilidad = num(r.total) - costoVend - gastosOp - fijosPer;
-    const margen = num(r.total) ? utilidad / num(r.total) : 0;
+    const utilidad = ventasTot - costoVend - gastosOp - fijosPer;
+    const margen = ventasTot ? utilidad / ventasTot : 0;
     // alertas
     const alertas = [];
     S.articulos.filter(a => a.tipo !== 'equipo' && a.activo && num(a.existencia) <= num(a.minimo)).forEach(a => alertas.push(['warn', `Por acabarse: <b>${esc(a.nombre)}</b> · quedan ${fmtN(a.existencia)} (mínimo ${fmtN(a.minimo)})`]));
@@ -681,18 +691,19 @@ const VISTAS_DUENO = {
       .forEach(t => alertas.push(['bad', `Turno de <b>${esc(t.usuario)}</b> (${fmtFecha(t.abierto_en)}): caja ${money(t.diferencia_caja)}, agua ${fmtN(t.diferencia_litros, 0)} L, garrafones ${t.diferencia_garrafones_nuevos ?? 0}`]));
     (abiertos || []).filter(t => (Date.now() - new Date(t.abierto_en)) > 14 * 36e5).forEach(t => alertas.push(['warn', `Hay un turno abierto desde ${fmtFecha(t.abierto_en)} (${esc(S.perfiles.find(p => p.id === t.usuario_id)?.nombre || '')})`]));
     (mants || []).forEach(m => { if (!m.ultima_fecha) return; const prox = addDays(m.ultima_fecha, m.cada_dias); if (prox <= fechaMX()) alertas.push(['warn', `Mantenimiento vencido: <b>${esc(m.actividad)}</b> (tocaba ${prox})`]); });
-    const litrosPipa = num(r.pipas.litros), litrosCons = num(r.litros_consumo);
+    const litrosPipa = num(r.pipas.litros), litrosCons = num(r.litros_consumo) + num(relleno?.litros_consumo) * dom.garrafones;
     document.getElementById('rs').outerHTML = `
     ${alertas.length ? `<div class="card"><h2>Alertas</h2>${alertas.map(([t, m]) => `<div class="alert ${t}">${m}</div>`).join('')}</div>` : '<div class="alert ok">Sin alertas en este periodo.</div>'}
     <div class="grid g4" style="margin-bottom:16px">
-      <div class="kpi"><div class="l">Ventas</div><div class="v">${money0(r.total)}</div><div class="s">${fmtN(r.num_ventas)} tickets</div></div>
-      <div class="kpi"><div class="l">Garrafones</div><div class="v">${fmtN(r.garrafones)}</div><div class="s">Meta ${fmtN(meta)} · ${pct(num(r.garrafones) / meta)}</div><div class="bar"><i style="width:${Math.min(100, num(r.garrafones) / meta * 100)}%"></i></div></div>
-      <div class="kpi"><div class="l">Efectivo / Transferencia</div><div class="v" style="font-size:20px">${money0(r.efectivo)} / ${money0(r.transferencia)}</div><div class="s">A crédito: ${money0(r.credito)}</div></div>
+      <div class="kpi"><div class="l">Ventas (todo)</div><div class="v">${money0(ventasTot)}</div><div class="s">Planta y empresas ${money0(r.total)} · Domicilio ${money0(dom.total)}</div></div>
+      <div class="kpi"><div class="l">Garrafones</div><div class="v">${fmtN(garrTot)}</div><div class="s">Meta ${fmtN(meta)} · ${pct(garrTot / meta)} · ${fmtN(dom.garrafones)} a domicilio</div><div class="bar"><i style="width:${Math.min(100, garrTot / meta * 100)}%"></i></div></div>
+      <div class="kpi"><div class="l">Efectivo / Transferencia</div><div class="v" style="font-size:20px">${money0(num(r.efectivo) + dom.efectivo)} / ${money0(num(r.transferencia) + dom.transferencia)}</div><div class="s">A crédito: ${money0(r.credito)}</div></div>
       <div class="kpi"><div class="l">Utilidad estimada</div><div class="v" style="color:${utilidad >= 0 ? 'var(--ok)' : 'var(--bad)'}">${money0(utilidad)}</div><div class="s">Margen ${pct(margen)}</div></div>
     </div>
     <div class="grid g2">
       <div class="card"><h2>Cómo sale la utilidad</h2><table><tbody>
-        <tr><td>Ventas</td><td class="n">${money(r.total)}</td></tr>
+        <tr><td>Ventas planta y empresas</td><td class="n">${money(r.total)}</td></tr>
+        <tr><td>Ventas a domicilio (${fmtN(dom.n)} pedidos)</td><td class="n">${money(dom.total)}</td></tr>
         <tr><td>Costo de lo vendido (agua + insumos)</td><td class="n">-${money(costoVend)}</td></tr>
         <tr><td>Gastos de operación (limpieza, mantenimiento, otros)</td><td class="n">-${money(gastosOp)}</td></tr>
         <tr><td>Gastos fijos proporcionales (${dias} días de ${money0(fijosMes)}/mes)</td><td class="n">-${money(fijosPer)}</td></tr>
@@ -700,7 +711,7 @@ const VISTAS_DUENO = {
         <p class="mut small">Las compras de insumos no se restan aquí porque entran al inventario; se restan cuando se venden.</p></div>
       <div class="card"><h2>Agua: pipas contra ventas</h2><table><tbody>
         <tr><td>Litros comprados en pipas (${fmtN(r.pipas.num)})</td><td class="n">${fmtN(litrosPipa)}</td></tr>
-        <tr><td>Litros usados según ventas (incluye rechazo)</td><td class="n">${fmtN(litrosCons)}</td></tr>
+        <tr><td>Litros usados según ventas y domicilio (incluye rechazo)</td><td class="n">${fmtN(litrosCons)}</td></tr>
         <tr><td><b>Diferencia</b></td><td class="n"><b>${fmtN(litrosPipa - litrosCons)}</b></td></tr>
         <tr><td>Equivale a garrafones sin vender</td><td class="n">${fmtN((litrosPipa - litrosCons) / 22)}</td></tr></tbody></table>
         <p class="mut small">Una diferencia grande y constante indica fugas, desperdicio o ventas sin registrar. Compara periodos de varias semanas: el agua de una pipa se usa a lo largo de varios días.</p></div>
@@ -813,15 +824,28 @@ const VISTAS_DUENO = {
   /* ---------- VENTAS ---------- */
   async ventas(main) {
     const per = selectorPeriodo(() => VISTAS_DUENO.ventas(main));
+    const domP = domicilioPeriodo();
     const data = await fetchAll(() => sb.from('ventas').select('*, venta_detalle(cantidad, producto_id, precio_unitario)').gte('fecha', inicioMX(S.periodo.desde)).lt('fecha', inicioMX(addDays(S.periodo.hasta, 1))).order('fecha', { ascending: false }));
     const nom = id => esc(S.perfiles.find(p => p.id === id)?.nombre || '—');
     const prod = id => S.productos.find(p => p.id === id)?.nombre || '';
     const cli = id => esc(S.clientes.find(c => c.id === id)?.nombre || '');
-    main.innerHTML = per.html + `<div class="card"><div class="row"><h2 style="margin:0">Ventas</h2><span class="sp"></span><span class="tag inf">${data.filter(v => !v.cancelada).length} ventas · ${money(data.filter(v => !v.cancelada).reduce((s, v) => s + num(v.total), 0))}</span></div>
+    const dom = await domP;
+    const vivas = data.filter(v => !v.cancelada), tf = f => vivas.filter(v => v.forma_pago === f).reduce((x, v) => x + num(v.total), 0);
+    const totPE = vivas.reduce((x, v) => x + num(v.total), 0);
+    main.innerHTML = per.html + `<div class="grid g4" style="margin-bottom:16px">
+      <div class="kpi"><div class="l">Total del periodo</div><div class="v">${money0(totPE + dom.total)}</div><div class="s">Planta, empresas y domicilio</div></div>
+      <div class="kpi"><div class="l">Planta y empresas</div><div class="v">${money0(totPE)}</div><div class="s">${fmtN(vivas.length)} ventas · crédito ${money0(tf('credito'))}</div></div>
+      <div class="kpi"><div class="l">Domicilio</div><div class="v">${money0(dom.total)}</div><div class="s">${fmtN(dom.n)} pedidos · ${fmtN(dom.garrafones)} garrafones</div></div>
+      <div class="kpi"><div class="l">Efectivo / Transferencia</div><div class="v" style="font-size:20px">${money0(tf('efectivo') + dom.efectivo)} / ${money0(tf('transferencia') + dom.transferencia)}</div><div class="s">Incluye domicilio</div></div></div>
+    <div class="card"><div class="row"><h2 style="margin:0">Ventas</h2><span class="sp"></span><span class="tag inf">${data.filter(v => !v.cancelada).length} ventas · ${money(data.filter(v => !v.cancelada).reduce((s, v) => s + num(v.total), 0))}</span></div>
       <div class="tw"><table><thead><tr><th>Fecha</th><th>Vendió</th><th>Productos</th><th>Cliente</th><th>Pago</th><th class="n">Total</th><th></th></tr></thead><tbody>
       ${data.map(v => `<tr><td>${fmtFecha(v.fecha)}</td><td>${nom(v.usuario_id)}</td><td>${v.venta_detalle.map(d => `${fmtN(d.cantidad)} ${esc(prod(d.producto_id))}`).join(', ')}</td><td>${cli(v.cliente_id)}</td>
         <td>${esc(v.forma_pago)}</td><td class="n">${money(v.total)}</td>
         <td>${v.cancelada ? `<span class="tag bad" title="${esc(v.motivo_cancelacion)}">Cancelada</span>` : `<button class="btn sm ghost" data-cancel="${v.id}">Cancelar</button>`}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">Sin ventas</td></tr>'}
+      </tbody></table></div></div>
+    <div class="card"><div class="row"><h2 style="margin:0">Domicilio</h2><span class="sp"></span><span class="tag inf">${fmtN(dom.n)} entregas · ${money(dom.total)}</span></div>
+      <div class="tw"><table><thead><tr><th>Entregado</th><th>Cliente</th><th>Garrafones</th><th>Pago</th><th class="n">Total</th></tr></thead><tbody>
+      ${dom.lista.map(p => `<tr><td>${fmtFecha(p.entregado_en)}</td><td>${esc(p.nombre)}</td><td>${esc(txtMarcas({ ...p, cantidad: p.entregado_cantidad }))}</td><td>${esc(p.forma_pago_real || '')}</td><td class="n">${money(p.monto_cobrado)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">Sin entregas a domicilio en este periodo</td></tr>'}
       </tbody></table></div></div>`;
     per.bind();
     main.querySelectorAll('[data-cancel]').forEach(b => b.onclick = () => modal(`<h2>Cancelar venta #${b.dataset.cancel}</h2>
