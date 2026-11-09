@@ -263,7 +263,7 @@ const VISTAS_REPARTO = {
       <div style="font-size:18px;margin-top:8px">${Object.entries(carga).map(([m, q]) => `<b>${q}</b> ${esc(m)}`).join(' · ') || '<span class="mut">Nada pendiente</span>'}</div></div>
     <div class="row" style="margin-bottom:10px"><h2 style="margin:0">Pedidos pendientes (${(ps || []).length})</h2><span class="sp"></span><button class="btn sm sec" id="rp-ref">Actualizar</button></div>
     ${(ps || []).map(p => `<div class="card" style="padding:16px">
-      <div class="row"><b style="font-size:18px">${esc(p.nombre)}</b>${p.origen === 'cliente' ? ' <span class="tag inf">Pidió en línea</span>' : ''}<span class="sp"></span><span class="tag ${p.forma_pago === 'efectivo' ? 'warn' : 'inf'}">${p.forma_pago === 'efectivo' ? 'Cobrar efectivo' : 'Transferencia'}</span></div>
+      <div class="row"><span class="tag">#${p.id}</span><b style="font-size:18px">${esc(p.nombre)}</b>${p.origen === 'cliente' ? ' <span class="tag inf">Pidió en línea</span>' : ''}<span class="sp"></span><span class="tag ${p.forma_pago === 'efectivo' ? 'warn' : 'inf'}">${p.forma_pago === 'efectivo' ? 'Cobrar efectivo' : 'Transferencia'}</span></div>
       <div style="margin:6px 0;font-size:17px"><b>${esc(txtMarcas(p))}</b> · ${money(num(p.cantidad) * num(p.precio_unitario))}</div>
       <div>${esc(p.domicilio)}</div>
       <div class="mut small">${p.notas ? esc(p.notas) + ' · ' : ''}pedido ${fmtHora(p.creado_en)}</div>
@@ -385,6 +385,7 @@ async function vistaPedidos(main) {
   const tag = e => e === 'pendiente' ? '<span class="tag warn">Pendiente</span>' : e === 'entregado' ? '<span class="tag ok">Entregado</span>' : '<span class="tag bad">Cancelado</span>';
   const pend = (ps || []).filter(p => p.estado === 'pendiente');
   const ent = (ps || []).filter(p => p.estado === 'entregado');
+  const fila = {}; (ps || []).filter(p => p.estado === 'pendiente').sort((a, b) => new Date(a.creado_en) - new Date(b.creado_en)).forEach((p, k) => fila[p.id] = k + 1);
   main.innerHTML = `
   <div class="grid g4" style="margin-bottom:16px">
     <div class="kpi"><div class="l">Pendientes</div><div class="v">${pend.length}</div><div class="s">${fmtN(pend.reduce((s, p) => s + num(p.cantidad), 0))} garrafones</div></div>
@@ -413,7 +414,7 @@ async function vistaPedidos(main) {
       <p class="mut small">El cliente se guarda solo con su teléfono. La próxima vez lo encuentras en el buscador con su último pedido.</p>
     </div>
     <div class="card"><h2>Pedidos de hoy</h2><div class="tw"><table><thead><tr><th>Cliente</th><th>Pedido</th><th>Estado</th><th></th></tr></thead><tbody>
-      ${(ps || []).map(p => `<tr><td><b>${esc(p.nombre)}</b><br><span class="mut small">${esc(p.domicilio)}</span></td>
+      ${(ps || []).map(p => `<tr><td><span class="mut small">#${p.id}${fila[p.id] ? ` · <b>${fila[p.id]}º en la fila</b>` : ''}</span><br><b>${esc(p.nombre)}</b><br><span class="mut small">${esc(p.domicilio)}</span></td>
         <td>${esc(txtMarcas(p))}<br><span class="mut small">${fmtHora(p.creado_en)} · ${esc(p.forma_pago)}${p.origen === 'cliente' ? ' · <b>pidió en línea</b>' : ''}</span>${p.notas ? `<br><span class="mut small">${esc(p.notas)}</span>` : ''}</td>
         <td>${tag(p.estado)}${p.estado === 'entregado' ? `<br><span class="mut small">${fmtHora(p.entregado_en)} · ${money(p.monto_cobrado)} ${esc(p.forma_pago_real)}</span>` : ''}</td>
         <td>${p.revisar ? `<span class="tag bad">Revisar</span><br><button class="btn sm" data-rev="${p.id}" style="margin:4px 0">${p.cliente_id ? 'Revisado' : 'Guardar cliente'}</button><br>` : ''}${p.estado === 'pendiente' ? `<button class="btn sm ghost" data-can="${p.id}">Cancelar</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Sin pedidos hoy</td></tr>'}
