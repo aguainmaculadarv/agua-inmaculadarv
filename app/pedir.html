@@ -48,6 +48,7 @@ input:focus,textarea:focus{outline:none;border-color:var(--teal)}
   <img class="logo" src="logo.jpg" alt="Agua Inmaculada">
   <p class="sub">Real del Valle · Pedido a domicilio</p>
 
+  <div id="fila" class="card hidden"></div>
   <div id="hecho" class="card hidden"></div>
 
   <div id="form">
@@ -125,6 +126,22 @@ sb.rpc('precio_pedido_en_linea').then(({ data }) => { precio = Number(data) || 0
 sb.rpc('datos_transferencia').then(({ data }) => { banco = data || ''; pintaBanco(); });
 pinta();
 
+const txtFila = e => !e ? '' : e.antes > 0 ? `Hay <b>${e.antes}</b> ${e.antes === 1 ? 'pedido' : 'pedidos'} antes del tuyo.` : 'Eres el siguiente en la fila.';
+const txtTiempo = e => !e ? '' : e.abierto ? (e.tiempo || '') : `Ahorita estamos cerrados: tu pedido se entrega ${e.abre}.`;
+const estadoFila = async tel => { try { const { data } = await sb.rpc('estado_pedido_en_linea', { p_telefono: tel }); return data || null; } catch { return null; } };
+async function pintaFila(tel) {
+  const e = tel && tel.length === 10 ? await estadoFila(tel) : await estadoFila('');
+  const box = $('fila'); if (!e) return;
+  if (e.pendiente) {
+    box.innerHTML = `<h2>Tu pedido #${e.id} va en camino</h2>${e.marcas ? `<p style="font-size:17px"><b>${Object.entries(e.marcas).map(([m, n]) => n + ' ' + m).join(' · ')}</b></p>` : ''}
+      <p>${txtFila(e)}</p><p class="mut">${txtTiempo(e)}</p><p class="mut small">Para cambiarlo o cancelarlo, escríbenos por WhatsApp con tu número de pedido.</p>`;
+    box.classList.remove('hidden');
+  } else if (!e.abierto) {
+    box.innerHTML = `<div class="alert inf" style="margin:0">${txtTiempo(e)} Puedes dejar tu pedido desde ahora.</div>`;
+    box.classList.remove('hidden');
+  } else box.classList.add('hidden');
+}
+pintaFila((leer('ai_tel') || '').replace(/\D/g, ''));
 const aviso = (t, c = 'bad') => $('msg').innerHTML = `<div class="alert ${c}">${t}</div>`;
 $('enviar').onclick = async () => {
   const tel = $('tel').value.replace(/\D/g, '').slice(-10);
@@ -140,7 +157,7 @@ $('enviar').onclick = async () => {
     if (error) throw error;
     if (!r.ok) {
       if (r.motivo === 'domicilio') { pideDom = true; $('nuevo').classList.remove('hidden'); $('nom').focus(); return aviso('No encontramos tu número. Déjanos tu nombre y domicilio para tu primer pedido.', 'inf'); }
-      if (r.motivo === 'pendiente') return aviso('Ya tienes un pedido en camino. Si necesitas cambiarlo, escríbenos por WhatsApp.', 'inf');
+      if (r.motivo === 'pendiente') { await pintaFila(tel); window.scrollTo(0, 0); return aviso('Ya tienes un pedido en camino (arriba ves cómo va). Si necesitas cambiarlo, escríbenos por WhatsApp.', 'inf'); }
       if (r.motivo === 'saturado') return aviso('En este momento hay muchos pedidos. Intenta en unos minutos o escríbenos por WhatsApp.');
       if (r.motivo === 'telefono') return aviso('Revisa tu teléfono: deben ser 10 dígitos.');
       if (r.motivo === 'cantidad') return aviso('Puedes pedir de 1 a 20 garrafones en línea. Para más, escríbenos por WhatsApp.');
@@ -148,9 +165,11 @@ $('enviar').onclick = async () => {
     }
     guardar('ai_tel', tel); guardar('ai_ult', JSON.stringify(marcas)); guardar('ai_fp', fp);
     try { sb.functions.invoke('aviso-pedido', { body: { id: r.id } }).catch(() => {}); } catch {}
-    $('form').classList.add('hidden');
+    const ef = await estadoFila(tel);
+    $('form').classList.add('hidden'); $('fila').classList.add('hidden');
     $('hecho').classList.remove('hidden');
-    $('hecho').innerHTML = `<h2>¡Listo! Recibimos tu pedido</h2>
+    $('hecho').innerHTML = `<h2>¡Listo! Recibimos tu pedido #${r.id}</h2>
+      ${ef ? `<p style="font-size:17px">${txtFila(ef)}</p><p>${txtTiempo(ef)}</p>` : ''}
       <p style="font-size:18px"><b>${Object.entries(marcas).map(([m, n]) => n + ' ' + m).join(' · ')}</b>${r.total ? ' · ' + money(r.total) : ''}</p>
       <p class="mut">${r.nuevo ? 'Como es tu primer pedido, te podemos marcar para confirmar tu domicilio.' : 'Va en camino a tu domicilio registrado.'} Pago: ${fp === 'efectivo' ? 'en efectivo al recibir' : 'por transferencia'}.</p>
       ${fp === 'transferencia' && banco ? `<h2 style="margin-top:16px">Datos para tu transferencia</h2>${cajaBanco()}
