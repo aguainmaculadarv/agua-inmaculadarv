@@ -53,6 +53,11 @@ function escucharPedidos() {
       const p = ev.new || {};
       toast(`Nuevo pedido: ${p.nombre || ''} · ${p.marcas ? Object.entries(p.marcas).map(([m, q]) => q + ' ' + m).join(', ') : (p.cantidad || '') + ' garrafones'}`, 'ok');
       if (S.modo === 'repartidor' && S.tab === 'r_pedidos') render();
+    })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'pedidos' }, ev => {
+      const n = ev.new || {}, o = ev.old || {};
+      if (n.pago_confirmado_en && !o.pago_confirmado_en && n.estado === 'pendiente') toast(`Pedido #${n.id} ${n.nombre || ''}: transferencia recibida, ya está pagado`, 'ok');
+      if (S.modo === 'repartidor' && S.tab === 'r_pedidos') render();
     }).subscribe();
 }
 // Pide a Supabase que mande la notificación al teléfono de Javier (si falla, igual le llega en tiempo real)
@@ -263,7 +268,7 @@ const VISTAS_REPARTO = {
       <div style="font-size:18px;margin-top:8px">${Object.entries(carga).map(([m, q]) => `<b>${q}</b> ${esc(m)}`).join(' · ') || '<span class="mut">Nada pendiente</span>'}</div></div>
     <div class="row" style="margin-bottom:10px"><h2 style="margin:0">Pedidos pendientes (${(ps || []).length})</h2><span class="sp"></span><button class="btn sm sec" id="rp-ref">Actualizar</button></div>
     ${(ps || []).map(p => `<div class="card" style="padding:16px">
-      <div class="row"><span class="tag">#${p.id}</span><b style="font-size:18px">${esc(p.nombre)}</b>${p.origen === 'cliente' ? ' <span class="tag inf">Pidió en línea</span>' : ''}<span class="sp"></span><span class="tag ${p.forma_pago === 'efectivo' ? 'warn' : 'inf'}">${p.forma_pago === 'efectivo' ? 'Cobrar efectivo' : 'Transferencia'}</span></div>
+      <div class="row"><span class="tag">#${p.id}</span><b style="font-size:18px">${esc(p.nombre)}</b>${p.origen === 'cliente' ? ' <span class="tag inf">Pidió en línea</span>' : ''}<span class="sp"></span>${p.pago_confirmado_en ? '<span class="tag ok" style="font-size:14px">✓ PAGADO · no cobrar</span>' : `<span class="tag ${p.forma_pago === 'efectivo' ? 'warn' : 'inf'}">${p.forma_pago === 'efectivo' ? 'Cobrar efectivo' : 'Transferencia · pide comprobante'}</span>`}</div>
       <div style="margin:6px 0;font-size:17px"><b>${esc(txtMarcas(p))}</b> · ${money(num(p.cantidad) * num(p.precio_unitario))}</div>
       <div>${esc(p.domicilio)}</div>
       <div class="mut small">${p.notas ? esc(p.notas) + ' · ' : ''}pedido ${fmtHora(p.creado_en)}</div>
@@ -284,7 +289,8 @@ const VISTAS_REPARTO = {
         <div class="total"><span>Cobrar</span><span id="ep-t">${money(p.cantidad * num(p.precio_unitario))}</span></div>
         <div class="row"><button class="btn ghost" data-close>Cancelar</button><span class="sp"></span><button class="btn ok" id="ep-b">Confirmar entrega</button></div>`,
         (box, close) => {
-          let fp = p.forma_pago;
+          let fp = p.pago_confirmado_en ? 'transferencia' : p.forma_pago;
+          if (p.pago_confirmado_en) box.querySelectorAll('[data-fp]').forEach(y => y.classList.toggle('on', y.dataset.fp === 'transferencia'));
           box.querySelectorAll('[data-fp]').forEach(x => x.onclick = () => { fp = x.dataset.fp; box.querySelectorAll('[data-fp]').forEach(y => y.classList.toggle('on', y === x)); });
           box.querySelector('#ep-q').oninput = () => box.querySelector('#ep-t').textContent = money((nval('ep-q') || 0) * num(p.precio_unitario));
           box.querySelector('#ep-b').onclick = e => busy(e.currentTarget, async () => {
@@ -417,7 +423,7 @@ async function vistaPedidos(main) {
       ${(ps || []).map(p => `<tr><td><span class="mut small">#${p.id}${fila[p.id] ? ` · <b>${fila[p.id]}º en la fila</b>` : ''}</span><br><b>${esc(p.nombre)}</b><br><span class="mut small">${esc(p.domicilio)}</span></td>
         <td>${esc(txtMarcas(p))}<br><span class="mut small">${fmtHora(p.creado_en)} · ${esc(p.forma_pago)}${p.origen === 'cliente' ? ' · <b>pidió en línea</b>' : ''}</span>${p.notas ? `<br><span class="mut small">${esc(p.notas)}</span>` : ''}</td>
         <td>${tag(p.estado)}${p.estado === 'entregado' ? `<br><span class="mut small">${fmtHora(p.entregado_en)} · ${money(p.monto_cobrado)} ${esc(p.forma_pago_real)}</span>` : ''}</td>
-        <td>${p.revisar ? `<span class="tag bad">Revisar</span><br><button class="btn sm" data-rev="${p.id}" style="margin:4px 0">${p.cliente_id ? 'Revisado' : 'Guardar cliente'}</button><br>` : ''}${p.estado === 'pendiente' ? `<button class="btn sm ghost" data-can="${p.id}">Cancelar</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Sin pedidos hoy</td></tr>'}
+        <td>${p.revisar ? `<span class="tag bad">Revisar</span><br><button class="btn sm" data-rev="${p.id}" style="margin:4px 0">${p.cliente_id ? 'Revisado' : 'Guardar cliente'}</button><br>` : ''}${p.estado === 'pendiente' && p.forma_pago === 'transferencia' ? (p.pago_confirmado_en ? `<span class="tag ok">✓ Pagado ${fmtHora(p.pago_confirmado_en)}</span><br><button class="btn sm ghost" data-pagoun="${p.id}" style="margin:4px 0">Deshacer</button><br>` : `<button class="btn sm ok" data-pago="${p.id}" style="margin:4px 0">Pago recibido</button><br>`) : ''}${p.estado === 'pendiente' ? `<button class="btn sm ghost" data-can="${p.id}">Cancelar</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Sin pedidos hoy</td></tr>'}
     </tbody></table></div>
     <div class="alert inf" style="margin-top:12px">Liga para que tus clientes pidan solos:<br><b id="pd-liga">${esc(new URL('pedir.html', location.href).href)}</b>
       <div class="row" style="margin-top:8px"><button class="btn sm" id="pd-copiar">Copiar liga</button></div></div></div>
@@ -468,6 +474,15 @@ async function vistaPedidos(main) {
     avisarPush(pid);
     toast('Pedido enviado a Javier', 'ok'); await vistaPedidos(main); document.getElementById('pd-bus')?.focus();
   });
+  main.querySelectorAll('[data-pago]').forEach(b => b.onclick = () => busy(b, async () => {
+    if (!(await confirmar('¿Ya revisaste en la app del banco que <b>sí llegó</b> la transferencia? Una captura de pantalla no basta.', 'Sí, ya llegó', 'Todavía no'))) return;
+    const { error } = await sb.rpc('confirmar_pago_pedido', { p_pedido_id: Number(b.dataset.pago) }); if (error) throw error;
+    toast('Pago confirmado: a Javier le aparece como pagado', 'ok'); vistaPedidos(main);
+  }));
+  main.querySelectorAll('[data-pagoun]').forEach(b => b.onclick = () => busy(b, async () => {
+    const { error } = await sb.rpc('confirmar_pago_pedido', { p_pedido_id: Number(b.dataset.pagoun), p_deshacer: true }); if (error) throw error;
+    toast('Se quitó la confirmación de pago', 'ok'); vistaPedidos(main);
+  }));
   const bav = document.getElementById('pd-av');
   if (bav) bav.onclick = () => {
     const pend = (ps || []).filter(p => p.estado === 'pendiente').sort((a, b) => fila[a.id] - fila[b.id]);
