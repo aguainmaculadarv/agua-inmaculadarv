@@ -413,7 +413,7 @@ async function vistaPedidos(main) {
       <button class="btn big" id="pd-b">Enviar pedido a Javier</button>
       <p class="mut small">El cliente se guarda solo con su teléfono. La próxima vez lo encuentras en el buscador con su último pedido.</p>
     </div>
-    <div class="card"><h2>Pedidos de hoy</h2><div class="tw"><table><thead><tr><th>Cliente</th><th>Pedido</th><th>Estado</th><th></th></tr></thead><tbody>
+    <div class="card"><div class="row"><h2 style="margin:0">Pedidos de hoy</h2><span class="sp"></span>${Object.keys(fila).length ? `<button class="btn sm sec" id="pd-av">Avisar a pendientes (${Object.keys(fila).length})</button>` : ''}</div><div class="tw"><table><thead><tr><th>Cliente</th><th>Pedido</th><th>Estado</th><th></th></tr></thead><tbody>
       ${(ps || []).map(p => `<tr><td><span class="mut small">#${p.id}${fila[p.id] ? ` · <b>${fila[p.id]}º en la fila</b>` : ''}</span><br><b>${esc(p.nombre)}</b><br><span class="mut small">${esc(p.domicilio)}</span></td>
         <td>${esc(txtMarcas(p))}<br><span class="mut small">${fmtHora(p.creado_en)} · ${esc(p.forma_pago)}${p.origen === 'cliente' ? ' · <b>pidió en línea</b>' : ''}</span>${p.notas ? `<br><span class="mut small">${esc(p.notas)}</span>` : ''}</td>
         <td>${tag(p.estado)}${p.estado === 'entregado' ? `<br><span class="mut small">${fmtHora(p.entregado_en)} · ${money(p.monto_cobrado)} ${esc(p.forma_pago_real)}</span>` : ''}</td>
@@ -468,6 +468,31 @@ async function vistaPedidos(main) {
     avisarPush(pid);
     toast('Pedido enviado a Javier', 'ok'); await vistaPedidos(main); document.getElementById('pd-bus')?.focus();
   });
+  const bav = document.getElementById('pd-av');
+  if (bav) bav.onclick = () => {
+    const pend = (ps || []).filter(p => p.estado === 'pendiente').sort((a, b) => fila[a.id] - fila[b.id]);
+    const base = 'Hola {nombre}, te escribimos de Agua Inmaculada Real del Valle. Tu pedido #{pedido} viene con retraso hoy; llegamos aproximadamente en 2 horas. Gracias por tu paciencia.';
+    modal(`<h2>Avisar a pendientes</h2>
+      <div class="field"><label>Mensaje (escríbelo una vez)</label><textarea id="av-t" rows="4">${esc(base)}</textarea>
+      <span class="mut small">{nombre} y {pedido} se cambian solos por el nombre y número de cada cliente.</span></div>
+      <div id="av-l"></div>
+      <div class="row" style="margin-top:12px"><span class="sp"></span><button class="btn ghost" data-close>Listo</button></div>`, box => {
+      const enviados = new Set();
+      const pinta = () => {
+        const t = box.querySelector('#av-t').value;
+        box.querySelector('#av-l').innerHTML = pend.map(p => {
+          const tel = soloDig(p.telefono).slice(-10);
+          const nom = String(p.nombre || '').split(' ')[0];
+          const msg = t.replaceAll('{nombre}', nom).replaceAll('{pedido}', p.id);
+          return `<div class="row" style="border-bottom:1px solid var(--line);padding:8px 0"><div><b>#${p.id} ${esc(p.nombre)}</b><br><span class="mut small">${tel.length === 10 ? tel : 'Sin teléfono'}</span></div><span class="sp"></span>
+            ${tel.length === 10 ? `<a class="btn sm ${enviados.has(p.id) ? 'ghost' : 'ok'}" data-av="${p.id}" href="https://wa.me/52${tel}?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">${enviados.has(p.id) ? '✓ Enviado' : 'WhatsApp'}</a>` : ''}</div>`;
+        }).join('');
+        box.querySelectorAll('[data-av]').forEach(a => a.addEventListener('click', () => { enviados.add(Number(a.dataset.av)); setTimeout(pinta, 300); }));
+      };
+      box.querySelector('#av-t').addEventListener('input', pinta);
+      pinta();
+    });
+  };
   main.querySelectorAll('[data-can]').forEach(b => b.onclick = () => modal(`<h2>Cancelar pedido</h2><div class="field"><label>Motivo</label><input type="text" id="cp-m"></div>
     <div class="row"><button class="btn ghost" data-close>Regresar</button><span class="sp"></span><button class="btn bad" id="cp-b">Cancelar pedido</button></div>`,
     (box, close) => box.querySelector('#cp-b').onclick = ev => busy(ev.currentTarget, async () => {
