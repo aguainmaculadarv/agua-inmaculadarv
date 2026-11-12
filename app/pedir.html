@@ -59,7 +59,11 @@ input:focus,textarea:focus{outline:none;border-color:var(--teal)}
 
     <div class="card">
       <h2>2. ¿Cuántos garrafones y de qué marca?</h2>
+      <p class="mut small" style="margin:-4px 0 6px">Elige la marca de <b>tu garrafón</b>.</p>
+      <h3 style="margin:8px 0 2px">Agua purificada <span class="mut" id="pp-pu"></span></h3>
       <div id="marcas"></div>
+      <div id="alc-w" class="hidden"><h3 style="margin:16px 0 2px">Agua alcalina <span class="mut" id="pp-al"></span></h3>
+      <div id="marcas-alc"></div></div>
       <div class="total"><span id="tq">0 garrafones</span><span id="tt"></span></div>
     </div>
 
@@ -93,20 +97,28 @@ input:focus,textarea:focus{outline:none;border-color:var(--teal)}
 <script>
 const sb = supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_KEY, { auth: { persistSession: false } });
 const MARCAS = ['Ciel', 'Epura', 'Bluerock', 'Bonafont', 'Rositas'];
-const q = Object.fromEntries(MARCAS.map(m => [m, 0]));
-let precio = 0, fp = 'efectivo', pideDom = false, banco = '';
+const ALC = MARCAS.map(m => m + ' alcalina');
+const KEYS = [...MARCAS, ...ALC];
+const q = Object.fromEntries(KEYS.map(m => [m, 0]));
+const idq = k => 'q-' + k.replace(/\s+/g, '_');
+let precio = 0, precioAlc = 0, fp = 'efectivo', pideDom = false, banco = '';
 const WA = '523330334510';
 const $ = id => document.getElementById(id);
 const money = v => '$' + Number(v || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const guardar = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 const leer = k => { try { return localStorage.getItem(k) || ''; } catch { return ''; } };
 
-$('marcas').innerHTML = MARCAS.map(m => `<div class="linea"><span class="n">${m}</span><button class="qb" data-m="${m}" data-d="-1" aria-label="Quitar ${m}">−</button><span class="q" id="q-${m}">0</span><button class="qb" data-m="${m}" data-d="1" aria-label="Agregar ${m}">+</button></div>`).join('');
+const fila1 = (k, n) => `<div class="linea"><span class="n">${n}</span><button class="qb" data-m="${k}" data-d="-1" aria-label="Quitar ${k}">−</button><span class="q" id="${idq(k)}">0</span><button class="qb" data-m="${k}" data-d="1" aria-label="Agregar ${k}">+</button></div>`;
+$('marcas').innerHTML = MARCAS.map(m => fila1(m, m)).join('');
+$('marcas-alc').innerHTML = MARCAS.map(m => fila1(m + ' alcalina', 'Garrafón ' + m)).join('');
+const prDe = k => k.endsWith(' alcalina') ? precioAlc : precio;
 const pinta = () => {
-  MARCAS.forEach(m => $('q-' + m).textContent = q[m]);
-  const t = MARCAS.reduce((x, m) => x + q[m], 0);
+  KEYS.forEach(k => $(idq(k)).textContent = q[k]);
+  const t = KEYS.reduce((x, k) => x + q[k], 0);
   $('tq').textContent = `${t} ${t === 1 ? 'garrafón' : 'garrafones'}`;
-  $('tt').textContent = precio ? money(t * precio) : '';
+  $('tt').textContent = precio ? money(KEYS.reduce((x, k) => x + q[k] * prDe(k), 0)) : '';
+  $('pp-pu').textContent = precio ? '· ' + money(precio) : '';
+  $('pp-al').textContent = precioAlc ? '· ' + money(precioAlc) : '';
 };
 document.querySelectorAll('.qb').forEach(b => b.onclick = () => { const m = b.dataset.m; q[m] = Math.max(0, Math.min(20, q[m] + Number(b.dataset.d))); pinta(); });
 const cajaBanco = () => banco ? `<div class="banco">${banco.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</div><button class="btn sec" type="button" onclick="copiarClabe(this)">Copiar número</button>` : '';
@@ -120,9 +132,15 @@ document.querySelectorAll('#pago button').forEach(b => b.onclick = () => { fp = 
 
 // recordar teléfono y último pedido en este celular
 $('tel').value = leer('ai_tel');
-try { const u = JSON.parse(leer('ai_ult') || '{}'); MARCAS.forEach(m => { if (u[m]) q[m] = Math.min(20, Number(u[m]) || 0); }); } catch {}
+try { const u = JSON.parse(leer('ai_ult') || '{}'); KEYS.forEach(m => { if (u[m]) q[m] = Math.min(20, Number(u[m]) || 0); }); } catch {}
 const f = leer('ai_fp'); if (f) document.querySelector(`#pago [data-fp="${f}"]`)?.click();
-sb.rpc('precio_pedido_en_linea').then(({ data }) => { precio = Number(data) || 0; pinta(); });
+sb.rpc('precios_pedido_en_linea').then(({ data, error }) => {
+  if (error || !data) return sb.rpc('precio_pedido_en_linea').then(({ data: d }) => { precio = Number(d) || 0; pinta(); });
+  precio = Number(data.purificada) || 0; precioAlc = Number(data.alcalina) || 0;
+  $('alc-w').classList.toggle('hidden', !precioAlc);
+  if (!precioAlc) ALC.forEach(k => q[k] = 0);
+  pinta();
+});
 sb.rpc('datos_transferencia').then(({ data }) => { banco = data || ''; pintaBanco(); });
 pinta();
 
@@ -145,12 +163,13 @@ pintaFila((leer('ai_tel') || '').replace(/\D/g, ''));
 const aviso = (t, c = 'bad') => $('msg').innerHTML = `<div class="alert ${c}">${t}</div>`;
 $('enviar').onclick = async () => {
   const tel = $('tel').value.replace(/\D/g, '').slice(-10);
-  const tot = MARCAS.reduce((x, m) => x + q[m], 0);
+  const tot = KEYS.reduce((x, m) => x + q[m], 0);
   if (tel.length !== 10) return aviso('Escribe tu teléfono a 10 dígitos.');
   if (!tot) return aviso('Elige al menos un garrafón.');
   if (pideDom && !$('dom').value.trim()) return aviso('Escribe tu domicilio para llevarte tu pedido.');
   const b = $('enviar'); b.disabled = true; b.textContent = 'Enviando…'; $('msg').innerHTML = '';
-  const marcas = Object.fromEntries(MARCAS.filter(m => q[m] > 0).map(m => [m, q[m]]));
+  if (tot > 20) return aviso('Máximo 20 garrafones por pedido. Para más, escríbenos por WhatsApp.');
+  const marcas = Object.fromEntries(KEYS.filter(m => q[m] > 0).map(m => [m, q[m]]));
   try {
     const { data: r, error } = await sb.rpc('pedido_en_linea', { p_telefono: tel, p_marcas: marcas, p_forma_pago: fp,
       p_comentario: $('com').value.trim() || null, p_nombre: $('nom').value.trim() || null, p_domicilio: pideDom ? $('dom').value.trim() : null });
@@ -160,6 +179,7 @@ $('enviar').onclick = async () => {
       if (r.motivo === 'pendiente') { await pintaFila(tel); window.scrollTo(0, 0); return aviso('Ya tienes un pedido en camino (arriba ves cómo va). Si necesitas cambiarlo, escríbenos por WhatsApp.', 'inf'); }
       if (r.motivo === 'saturado') return aviso('En este momento hay muchos pedidos. Intenta en unos minutos o escríbenos por WhatsApp.');
       if (r.motivo === 'telefono') return aviso('Revisa tu teléfono: deben ser 10 dígitos.');
+      if (r.motivo === 'alcalina') return aviso('Por ahora no tenemos agua alcalina a domicilio. Pide purificada o escríbenos por WhatsApp.');
       if (r.motivo === 'cantidad') return aviso('Puedes pedir de 1 a 20 garrafones en línea. Para más, escríbenos por WhatsApp.');
       return aviso('Por ahora no podemos recibir pedidos en línea. Escríbenos por WhatsApp.');
     }

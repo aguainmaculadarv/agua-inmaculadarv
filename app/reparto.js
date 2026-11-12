@@ -269,7 +269,7 @@ const VISTAS_REPARTO = {
     <div class="row" style="margin-bottom:10px"><h2 style="margin:0">Pedidos pendientes (${(ps || []).length})</h2><span class="sp"></span><button class="btn sm sec" id="rp-ref">Actualizar</button></div>
     ${(ps || []).map(p => `<div class="card" style="padding:16px">
       <div class="row"><span class="tag">#${p.id}</span><b style="font-size:18px">${esc(p.nombre)}</b>${p.origen === 'cliente' ? ' <span class="tag inf">Pidió en línea</span>' : ''}<span class="sp"></span>${p.pago_confirmado_en ? '<span class="tag ok" style="font-size:14px">✓ PAGADO · no cobrar</span>' : `<span class="tag ${p.forma_pago === 'efectivo' ? 'warn' : 'inf'}">${p.forma_pago === 'efectivo' ? 'Cobrar efectivo' : 'Transferencia · pide comprobante'}</span>`}</div>
-      <div style="margin:6px 0;font-size:17px"><b>${esc(txtMarcas(p))}</b> · ${money(num(p.cantidad) * num(p.precio_unitario))}</div>
+      <div style="margin:6px 0;font-size:17px"><b>${esc(txtMarcas(p))}</b> · ${money(totalPedido(p))}</div>
       <div>${esc(p.domicilio)}</div>
       <div class="mut small">${p.notas ? esc(p.notas) + ' · ' : ''}pedido ${fmtHora(p.creado_en)}</div>
       <div class="row" style="margin-top:12px">
@@ -286,13 +286,13 @@ const VISTAS_REPARTO = {
       modal(`<h2>Entregar a ${esc(p.nombre)}</h2><p><b>${esc(txtMarcas(p))}</b></p>
         <div class="field"><label>Garrafones entregados</label><input type="number" id="ep-q" value="${p.cantidad}" inputmode="numeric"></div>
         <div class="field"><label>¿Cómo pagó?</label><div class="pay"><button data-fp="efectivo" class="${p.forma_pago === 'efectivo' ? 'on' : ''}">Efectivo</button><button data-fp="transferencia" class="${p.forma_pago === 'transferencia' ? 'on' : ''}">Transferencia</button></div></div>
-        <div class="total"><span>Cobrar</span><span id="ep-t">${money(p.cantidad * num(p.precio_unitario))}</span></div>
+        <div class="total"><span>Cobrar</span><span id="ep-t">${money(totalPedido(p))}</span></div>
         <div class="row"><button class="btn ghost" data-close>Cancelar</button><span class="sp"></span><button class="btn ok" id="ep-b">Confirmar entrega</button></div>`,
         (box, close) => {
           let fp = p.pago_confirmado_en ? 'transferencia' : p.forma_pago;
           if (p.pago_confirmado_en) box.querySelectorAll('[data-fp]').forEach(y => y.classList.toggle('on', y.dataset.fp === 'transferencia'));
           box.querySelectorAll('[data-fp]').forEach(x => x.onclick = () => { fp = x.dataset.fp; box.querySelectorAll('[data-fp]').forEach(y => y.classList.toggle('on', y === x)); });
-          box.querySelector('#ep-q').oninput = () => box.querySelector('#ep-t').textContent = money((nval('ep-q') || 0) * num(p.precio_unitario));
+          box.querySelector('#ep-q').oninput = () => box.querySelector('#ep-t').textContent = money(totalPedido(p, nval('ep-q') || 0));
           box.querySelector('#ep-b').onclick = e => busy(e.currentTarget, async () => {
             const q = nval('ep-q'); if (!q || q <= 0) throw new Error('Escribe la cantidad');
             const { error } = await sb.rpc('entregar_pedido', { p_pedido_id: p.id, p_turno_id: S.turno.id, p_cantidad: q, p_forma_pago: fp });
@@ -379,6 +379,8 @@ const txtMarcas = p => p.marcas && Object.keys(p.marcas).length
   ? Object.entries(p.marcas).map(([m, q]) => `${q} ${m}`).join(' · ')
   : `${fmtN(p.cantidad)} ${S.productos.find(x => x.id === p.producto_id)?.nombre || 'garrafones'}`;
 const soloDig = t => String(t || '').replace(/\D/g, '');
+// total del pedido: la alcalina va a su precio; si se entregan menos, se descuenta primero de purificada
+const totalPedido = (p, q = p.cantidad) => { const a = Math.min(num(p.alcalina), num(q)); return (num(q) - a) * num(p.precio_unitario) + a * num(p.precio_alcalina ?? p.precio_unitario); };
 
 async function vistaPedidos(main) {
   await cargarCatalogos();
@@ -388,6 +390,12 @@ async function vistaPedidos(main) {
   const domis = S.clientes.filter(c => c.tipo === 'domicilio');
   const rel = S.productos.find(p => p.nombre === 'Relleno garrafón');
   const precio = num(rel?.precio_domicilio ?? rel?.precio);
+  const alcP = S.productos.find(p => p.nombre === 'Agua alcalina' && p.activo !== false);
+  const precioAlc = alcP ? num(alcP.precio_domicilio ?? alcP.precio) : 0;
+  const KEYS = [...MARCAS, ...(precioAlc ? MARCAS.map(m => m + ' alcalina') : [])];
+  const prDe = k => k.endsWith(' alcalina') ? precioAlc : precio;
+  const idq = k => 'pd-q-' + k.replace(/\s+/g, '_');
+  const filaQ = (k, n) => `<div class="cart-line"><span class="n">${n}</span><button class="qb" data-mm="${k}">−</button><b id="${idq(k)}" style="min-width:28px;text-align:center">0</b><button class="qb" data-mp="${k}">+</button></div>`;
   const tag = e => e === 'pendiente' ? '<span class="tag warn">Pendiente</span>' : e === 'entregado' ? '<span class="tag ok">Entregado</span>' : '<span class="tag bad">Cancelado</span>';
   const pend = (ps || []).filter(p => p.estado === 'pendiente');
   const ent = (ps || []).filter(p => p.estado === 'entregado');
@@ -406,7 +414,8 @@ async function vistaPedidos(main) {
       <div id="pd-res"></div>
       <div id="pd-ult"></div>
       <div class="field"><label>Garrafones por marca</label>
-        <div id="pd-marcas">${MARCAS.map(m => `<div class="cart-line"><span class="n">${m}</span><button class="qb" data-mm="${m}">−</button><b id="pd-q-${m}" style="min-width:28px;text-align:center">0</b><button class="qb" data-mp="${m}">+</button></div>`).join('')}</div></div>
+        <div id="pd-marcas"><div class="mut small">Purificada · ${money(precio)}</div>${MARCAS.map(m => filaQ(m, m)).join('')}
+          ${precioAlc ? `<div class="mut small" style="margin-top:10px">Alcalina · ${money(precioAlc)} (marca del garrafón)</div>${MARCAS.map(m => filaQ(m + ' alcalina', m + ' alcalina')).join('')}` : ''}</div></div>
       <div class="total"><span id="pd-tq">0 garrafones</span><span id="pd-tt">$0.00</span></div>
       <div class="grid g2">
         <div class="field"><label>Nombre</label><input type="text" id="pd-n"></div>
@@ -428,13 +437,13 @@ async function vistaPedidos(main) {
     <div class="alert inf" style="margin-top:12px">Liga para que tus clientes pidan solos:<br><b id="pd-liga">${esc(new URL('pedir.html', location.href).href)}</b>
       <div class="row" style="margin-top:8px"><button class="btn sm" id="pd-copiar">Copiar liga</button></div></div></div>
   </div>`;
-  const q = Object.fromEntries(MARCAS.map(m => [m, 0]));
+  const q = Object.fromEntries(KEYS.map(m => [m, 0]));
   let cli = null, fp = 'efectivo';
   const pintaQ = () => {
-    MARCAS.forEach(m => document.getElementById('pd-q-' + m).textContent = q[m]);
-    const t = MARCAS.reduce((x, m) => x + q[m], 0);
+    KEYS.forEach(m => document.getElementById(idq(m)).textContent = q[m]);
+    const t = KEYS.reduce((x, m) => x + q[m], 0);
     document.getElementById('pd-tq').textContent = `${t} ${t === 1 ? 'garrafón' : 'garrafones'}`;
-    document.getElementById('pd-tt').textContent = money(t * precio);
+    document.getElementById('pd-tt').textContent = money(KEYS.reduce((x, m) => x + q[m] * prDe(m), 0));
   };
   main.querySelectorAll('[data-mp]').forEach(b => b.onclick = () => { q[b.dataset.mp]++; pintaQ(); });
   main.querySelectorAll('[data-mm]').forEach(b => b.onclick = () => { q[b.dataset.mm] = Math.max(0, q[b.dataset.mm] - 1); pintaQ(); });
@@ -447,7 +456,7 @@ async function vistaPedidos(main) {
     document.getElementById('pd-d').value = c.domicilio || ''; document.getElementById('pd-m').value = c.maps_url || '';
     const { data: u } = await sb.from('pedidos').select('marcas,cantidad,producto_id,forma_pago,creado_en,notas').eq('cliente_id', c.id).neq('estado', 'cancelado').order('creado_en', { ascending: false }).limit(1);
     const ul = u && u[0];
-    MARCAS.forEach(m => q[m] = 0);
+    KEYS.forEach(m => q[m] = 0);
     if (ul?.marcas) Object.entries(ul.marcas).forEach(([m, n]) => { if (m in q) q[m] = num(n); });
     if (ul?.forma_pago) main.querySelector(`#pd-fp [data-fp="${ul.forma_pago}"]`)?.click();
     document.getElementById('pd-ult').innerHTML = ul ? `<div class="alert inf">Último pedido (${fmtFecha(ul.creado_en)}): <b>${esc(txtMarcas(ul))}</b>. Ya quedó cargado; ajusta si cambia.</div>` : '<div class="alert inf">Primer pedido de este cliente.</div>';
@@ -463,11 +472,11 @@ async function vistaPedidos(main) {
     if (d.length >= 7 && !res.length) document.getElementById('pd-t').value = e.target.value.trim();
   };
   document.getElementById('pd-b').onclick = e => busy(e.currentTarget, async () => {
-    const tot = MARCAS.reduce((x, m) => x + q[m], 0);
+    const tot = KEYS.reduce((x, m) => x + q[m], 0);
     if (!tot) throw new Error('Agrega al menos un garrafón');
     if (!val('pd-d')) throw new Error('Escribe el domicilio');
     if (!cli && !val('pd-t')) throw new Error('Escribe el teléfono para guardar al cliente');
-    const marcas = Object.fromEntries(MARCAS.filter(m => q[m] > 0).map(m => [m, q[m]]));
+    const marcas = Object.fromEntries(KEYS.filter(m => q[m] > 0).map(m => [m, q[m]]));
     const { data: pid, error } = await sb.rpc('crear_pedido', { p_nombre: val('pd-n'), p_telefono: val('pd-t') || null, p_domicilio: val('pd-d'), p_maps: val('pd-m') || null,
       p_producto_id: rel?.id || null, p_cantidad: tot, p_forma_pago: fp, p_notas: val('pd-no') || null, p_cliente_id: cli?.id || null, p_marcas: marcas });
     if (error) throw error;
