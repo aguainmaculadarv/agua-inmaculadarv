@@ -773,7 +773,8 @@ const VISTAS_DUENO = {
       <div class="kpi"><div class="l">Vencido</div><div class="v" style="color:${ven > 0 ? 'var(--bad)' : 'var(--ok)'}">${money0(ven)}</div><div class="s">${data.filter(c => num(c.vencido) > 0).length} clientes</div></div>
       <div class="kpi"><div class="l">Por vencer</div><div class="v">${money0(tot - ven)}</div></div></div>
     <div class="card" style="margin-bottom:16px"><h2>Estado de cuenta mensual</h2>
-      <div class="grid g3" style="align-items:end">
+      <div class="grid g4" style="align-items:end">
+        <div class="field"><label>Buscar empresa</label><input type="search" id="ec-bus" placeholder="Escribe parte del nombre" autocomplete="off"></div>
         <div class="field"><label>Empresa</label><select id="ec-c"><option value="">— Elige —</option>${S.clientes.filter(c => c.tipo === 'empresa' || c.tipo === 'restaurante').map(c => `<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select></div>
         <div class="field"><label>Mes</label><input type="month" id="ec-m" value="${fechaMX().slice(0, 7)}"></div>
         <div class="field"><button class="btn" id="ec-b">Ver estado de cuenta</button></div></div>
@@ -786,6 +787,14 @@ const VISTAS_DUENO = {
         <td><button class="btn sm cb-pago" data-id="${c.cliente_id}">Registrar pago</button> <button class="btn sm ghost cb-ver" data-id="${c.cliente_id}">Ver</button> <button class="btn sm ghost cb-ec" data-id="${c.cliente_id}">Estado</button></td></tr>`).join('') || '<tr><td colspan="5" class="empty">Nadie te debe. Todo al corriente.</td></tr>'}
     </tbody></table></div><p class="mut small">Los pagos se aplican a las entregas más viejas primero.</p></div>`;
     const reload = () => VISTAS_DUENO.cobrar(main);
+    const ecSel = document.getElementById('ec-c'), ecOpts = [...ecSel.options].slice(1).map(o => ({ v: o.value, t: o.textContent }));
+    const norm = t => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    document.getElementById('ec-bus').oninput = ev => {
+      const t = norm(ev.target.value.trim());
+      const res = ecOpts.filter(o => !t || norm(o.t).includes(t));
+      ecSel.innerHTML = `<option value="">— ${res.length ? 'Elige' : 'Sin resultados'} —</option>` + res.map(o => `<option value="${o.v}">${esc(o.t)}</option>`).join('');
+      if (t && res.length) ecSel.value = res[0].v;
+    };
     document.getElementById('ec-b').onclick = e => busy(e.currentTarget, async () => {
       const id = val('ec-c'), m = val('ec-m'); if (!id) throw new Error('Elige la empresa'); if (!m) throw new Error('Elige el mes');
       await estadoCuenta(Number(id), m);

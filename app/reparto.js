@@ -768,7 +768,9 @@ async function estadoCuenta(clienteId, mes) {
   const cant = (v, pid) => (v.venta_detalle || []).filter(d => d.producto_id === pid).reduce((s, d) => s + num(d.cantidad), 0);
   // renglones: entregas de Javier + ventas en planta que no vienen de una entrega
   const filas = (en || []).map(e => { const v = venta(e.venta_id); return { fecha: e.fecha, folio: folioE(e.id), llenos: num(e.llenos), nuevos: num(e.nuevos), vacios: num(e.vacios),
-      recibio: esc(e.recibio || '') + (urlDe(e.firma) ? `<br><img src="${esc(urlDe(e.firma))}" alt="firma" style="height:28px;max-width:90px">` : ''),
+      recibio: esc(e.recibio || '') + (urlDe(e.firma) ? `<br><img src="${esc(urlDe(e.firma))}" alt="firma" style="height:28px;max-width:90px">` : '')
+        + (e.corregida_en ? `<br><small style="color:#B7791F">Corregida ${new Date(e.corregida_en).toLocaleDateString('es-MX', { timeZone: CFG.ZONA })}</small>` : '')
+        + `<br><button class="btn sm ghost np" data-corr="${e.id}" style="margin-top:4px">Corregir</button>`,
       imp: v && !v.cancelada ? num(v.total) : 0, fp: v?.forma_pago }; })
     .concat((vp || []).filter(v => !ids.includes(v.id)).map(v => ({ fecha: v.fecha, folio: 'Ticket #' + v.id, llenos: cant(v, idRel), nuevos: cant(v, idNue), vacios: null,
       recibio: (v.recibio ? esc(v.recibio) + '<br><small>en planta</small>' : 'Recogió en planta') + imgF(v.firma), imp: num(v.total), fp: v.forma_pago })))
@@ -802,10 +804,33 @@ async function estadoCuenta(clienteId, mes) {
       ${tel.length === 10 ? `<a class="btn sec" href="https://wa.me/52${tel}?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">Mensaje WhatsApp</a>` : ''}
       <button class="btn" id="ec-p">Guardar PDF</button></div>
     <p class="mut small">"Guardar PDF" abre la impresión: elige "Guardar como PDF" y luego mándalo por WhatsApp.</p>`, box => {
+    box.querySelectorAll('[data-corr]').forEach(b => b.onclick = () => {
+      const e = (en || []).find(x => x.id == b.dataset.corr), v = venta(e.venta_id);
+      let fp = v && !v.cancelada ? v.forma_pago : (c.dias_credito === 0 ? (c.forma_pago_habitual || 'efectivo') : 'credito');
+      modal(`<h2>Corregir entrega ${folioE(e.id)}</h2><p class="mut">${esc(c.nombre)} · ${new Date(e.fecha).toLocaleString('es-MX', { timeZone: CFG.ZONA })} · recibió ${esc(e.recibio || '')}</p>
+        <div class="grid g3"><div class="field"><label>Llenos</label><input type="number" id="ce-l" inputmode="numeric" value="${e.llenos}"></div>
+          <div class="field"><label>Nuevos</label><input type="number" id="ce-n" inputmode="numeric" value="${num(e.nuevos)}"></div>
+          <div class="field"><label>Vacíos</label><input type="number" id="ce-v" inputmode="numeric" value="${e.vacios}"></div></div>
+        <div class="field"><label>Forma de pago</label><div class="pay" id="ce-fp">${['credito', 'efectivo', 'transferencia'].map(f => `<button data-fp="${f}" class="${f === fp ? 'on' : ''}">${f === 'credito' ? 'Crédito' : f === 'efectivo' ? 'Efectivo' : 'Transferencia'}</button>`).join('')}</div></div>
+        <div class="field"><label>Motivo de la corrección</label><input type="text" id="ce-m" placeholder="ej. Javier capturó 10 y eran 8"></div>
+        <p class="mut small">Se recalcula el cobro y los garrafones prestados. La firma no cambia y queda anotado lo que tenía antes.${v && !v.cancelada && v.forma_pago !== 'credito' ? ' Ojo: era de contado; el corte de ese turno no se recalcula.' : ''}</p>
+        <div class="row"><button class="btn ghost" data-close>Cancelar</button><span class="sp"></span><button class="btn ok" id="ce-b">Guardar corrección</button></div>`, (b2, close2) => {
+        b2.querySelectorAll('#ce-fp [data-fp]').forEach(x => x.onclick = () => { fp = x.dataset.fp; b2.querySelectorAll('#ce-fp [data-fp]').forEach(y => y.classList.toggle('on', y === x)); });
+        b2.querySelector('#ce-b').onclick = ev => busy(ev.currentTarget, async () => {
+          const l = nval('ce-l'), n = nval('ce-n'), vv = nval('ce-v');
+          if ([l, n, vv].some(x => x === null || x < 0)) throw new Error('Escribe las cantidades (0 si ninguna)');
+          if (!val('ce-m')) throw new Error('Escribe el motivo de la corrección');
+          const { error } = await sb.rpc('corregir_entrega', { p_entrega_id: e.id, p_llenos: l, p_nuevos: n, p_vacios: vv, p_forma_pago: fp, p_motivo: val('ce-m') });
+          if (error) throw error;
+          close2(); document.querySelectorAll('.modal').forEach(m => m.remove());
+          toast('Entrega corregida', 'ok'); await estadoCuenta(clienteId, mes);
+        });
+      });
+    });
     box.querySelector('#ec-p').addEventListener('click', () => {
       const w = window.open('', '_blank');
       if (!w) return toast('Permite ventanas emergentes para guardar el PDF', 'bad');
-      w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Estado de cuenta ${esc(c.nombre)} ${esc(nomMes)}</title><base href="${location.href}"><style>body{margin:24px}${css}@page{size:letter;margin:14mm}</style></head><body>${doc}<script>window.onload=()=>setTimeout(()=>print(),400)<\/script></body></html>`);
+      w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Estado de cuenta ${esc(c.nombre)} ${esc(nomMes)}</title><base href="${location.href}"><style>body{margin:24px}${css}.np{display:none!important}@page{size:letter;margin:14mm}</style></head><body>${doc}<script>window.onload=()=>setTimeout(()=>print(),400)<\/script></body></html>`);
       w.document.close();
     });
   });
