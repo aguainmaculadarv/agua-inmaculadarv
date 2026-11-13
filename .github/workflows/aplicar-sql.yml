@@ -1,5 +1,5 @@
 # Aplica en Supabase los archivos SQL nuevos o modificados en la carpeta sql/.
-# Siempre espera la aprobación del dueño (entorno "produccion" con revisor obligatorio).
+# Siempre espera la aprobación del dueño (entorno "roduccion" con revisor obligatorio).
 # La cadena de conexión vive en el secreto SUPABASE_DB_URL; nadie la ve en el código.
 name: Aplicar SQL en Supabase
 
@@ -18,7 +18,7 @@ concurrency: sql-produccion
 jobs:
   aplicar:
     runs-on: ubuntu-latest
-    environment: produccion
+    environment: roduccion
     steps:
       - uses: actions/checkout@v4
         with:
