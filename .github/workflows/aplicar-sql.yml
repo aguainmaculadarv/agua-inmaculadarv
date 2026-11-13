@@ -1,0 +1,50 @@
+# Aplica en Supabase los archivos SQL nuevos o modificados en la carpeta sql/.
+# Siempre espera la aprobación del dueño (entorno "produccion" con revisor obligatorio).
+# La cadena de conexión vive en el secreto SUPABASE_DB_URL; nadie la ve en el código.
+name: Aplicar SQL en Supabase
+
+on:
+  push:
+    branches: [main]
+    paths: ['sql/**.sql']
+  workflow_dispatch:
+    inputs:
+      archivo:
+        description: 'Archivo dentro de sql/ a volver a aplicar (ej. 17_corregir_entrega.sql)'
+        required: true
+
+concurrency: sql-produccion
+
+jobs:
+  aplicar:
+    runs-on: ubuntu-latest
+    environment: produccion
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Elegir archivos
+        id: f
+        env:
+          EVENTO: ${{ github.event_name }}
+          ARCHIVO: ${{ inputs.archivo }}
+          ANTES: ${{ github.event.before }}
+          AHORA: ${{ github.sha }}
+        run: |
+          if [ "$EVENTO" = "workflow_dispatch" ]; then
+            F="sql/$(basename "$ARCHIVO")"
+          else
+            F=$(git diff --name-only --diff-filter=AM "$ANTES" "$AHORA" -- 'sql/*.sql' | sort | tr '\n' ' ')
+          fi
+          echo "Se aplicará: $F"
+          echo "files=$F" >> "$GITHUB_OUTPUT"
+      - name: Aplicar en Supabase
+        env:
+          DB: ${{ secrets.SUPABASE_DB_URL }}
+          FILES: ${{ steps.f.outputs.files }}
+        run: |
+          if [ -z "$DB" ]; then echo "Falta el secreto SUPABASE_DB_URL"; exit 1; fi
+          for f in $FILES; do
+            echo "===== $f"
+            psql "$DB" -v ON_ERROR_STOP=1 -f "$f"
+          done
