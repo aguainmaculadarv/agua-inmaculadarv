@@ -595,6 +595,73 @@ const VISTAS_PLANTA = {
   }
 };
 
+/* ---------- FACTURAS DEL SAT (XML CFDI) ---------- */
+function leerCFDI(texto) {
+  const x = new DOMParser().parseFromString(texto, 'application/xml');
+  if (x.getElementsByTagName('parsererror').length) throw new Error('El archivo no es un XML válido');
+  const uno = n => x.getElementsByTagNameNS('*', n)[0];
+  const c = uno('Comprobante'), r = uno('Receptor'), t = uno('TimbreFiscalDigital');
+  if (!c || !r) throw new Error('No parece una factura del SAT (CFDI)');
+  return {
+    tipo: c.getAttribute('TipoDeComprobante'), serie: c.getAttribute('Serie') || '', folio: c.getAttribute('Folio') || '',
+    fecha: c.getAttribute('Fecha'), total: num(c.getAttribute('Total')), rfc: (r.getAttribute('Rfc') || '').toUpperCase(),
+    nombre: r.getAttribute('Nombre') || '', uuid: t?.getAttribute('UUID') || ''
+  };
+}
+// Elige las notas que suman el total: primero las más viejas en orden; si no, busca una combinación exacta.
+function notasQueSuman(ventas, total) {
+  const T = Math.round(total * 100);
+  let acc = 0; for (let i = 0; i < ventas.length; i++) { acc += Math.round(num(ventas[i].total) * 100); if (Math.abs(acc - T) <= 50) return ventas.slice(0, i + 1).map(v => v.id); if (acc > T + 50) break; }
+  const vals = ventas.map(v => Math.round(num(v.total))), W = Math.round(total);
+  if (ventas.length > 120 || W > 200000 || ventas.some(v => Math.abs(num(v.total) - Math.round(num(v.total))) > 0.001) || Math.abs(total - W) > 0.001) return null;
+  const prev = new Int32Array(W + 1).fill(-2); prev[0] = -1; const de = new Int32Array(W + 1);
+  for (let i = 0; i < vals.length; i++) for (let w = W; w >= vals[i]; w--) if (prev[w] === -2 && prev[w - vals[i]] !== -2 && de[w - vals[i]] !== i + 1) { prev[w] = i; de[w] = i + 1; }
+  if (prev[W] === -2) return null;
+  const ids = []; let w = W; while (w > 0) { const i = prev[w]; ids.push(ventas[i].id); w -= vals[i]; }
+  return ids;
+}
+async function facturaXML(texto, nombreArchivo) {
+  const f = leerCFDI(texto);
+  if (f.tipo && f.tipo !== 'I') throw new Error('Es un comprobante de tipo ' + f.tipo + ', no una factura de ingreso');
+  const folioTxt = [`${f.serie}${f.folio}`.trim(), f.uuid].filter(Boolean).join(' · ');
+  const clis = S.clientes.filter(c => (c.rfc || '').toUpperCase() === f.rfc);
+  if (!clis.length) throw new Error(`Ninguna empresa tiene el RFC ${f.rfc} (${f.nombre}). Captúralo en Clientes y vuelve a subir la factura.`);
+  if (f.uuid) {
+    const { data: ya } = await sb.from('ventas').select('id').ilike('folio_factura', '%' + f.uuid + '%').limit(1);
+    if (ya && ya.length) throw new Error(`La factura ${folioTxt} ya estaba registrada`);
+  }
+  const { data: vs, error } = await sb.from('ventas').select('id,fecha,total,forma_pago,cliente_id').in('cliente_id', clis.map(c => c.id))
+    .eq('facturada', false).eq('cancelada', false).lte('fecha', f.fecha ? new Date(new Date(f.fecha).getTime() + 864e5).toISOString() : new Date().toISOString()).order('fecha');
+  if (error) throw error;
+  const sel = new Set(notasQueSuman(vs || [], f.total) || []);
+  const exacto = sel.size > 0;
+  await new Promise(res => modal(`<h2>Factura ${esc(folioTxt || nombreArchivo)}</h2>
+    <p><b>${esc(clis.map(c => c.nombre).join(', '))}</b> · ${esc(f.rfc)}<br><span class="mut small">${esc(f.nombre)} · ${f.fecha ? fmtFecha(f.fecha) : ''}</span></p>
+    <div class="total"><span>Total facturado</span><span>${money(f.total)}</span></div>
+    ${exacto ? '<div class="alert ok">Encontré las notas que suman exacto el total. Revisa y confirma.</div>'
+             : `<div class="alert warn">${(vs || []).length ? 'Ninguna combinación de notas da el total exacto. Palomea a mano las que cubre esta factura.' : 'Esta empresa no tiene notas pendientes de facturar.'}</div>`}
+    <div class="tw" style="max-height:300px;overflow:auto"><table><tbody>
+      ${(vs || []).map(v => `<tr><td><label class="chk" style="margin:0"><input type="checkbox" data-fv="${v.id}" ${sel.has(v.id) ? 'checked' : ''}> ${fmtFecha(v.fecha)}</label></td><td class="mut small">Nota #${v.id} · ${esc(v.forma_pago)}</td><td class="n">${money(v.total)}</td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="total"><span>Notas seleccionadas</span><span id="fx-s"></span></div>
+    <div class="row"><button class="btn ghost" id="fx-x">Cancelar</button><span class="sp"></span><button class="btn ok" id="fx-ok">Marcar como facturadas</button></div>`, (box, close) => {
+    const marcadas = () => [...box.querySelectorAll('[data-fv]:checked')].map(i => Number(i.dataset.fv));
+    const suma = () => marcadas().reduce((x, id) => x + num(vs.find(v => v.id === id).total), 0);
+    const pinta = () => { const sm = suma(), d = sm - f.total; box.querySelector('#fx-s').innerHTML = `${money(sm)}${Math.abs(d) < 0.5 ? ' ✓' : ` <span style="color:var(--bad)">(${d > 0 ? '+' : ''}${money(d)})</span>`}`; };
+    box.querySelectorAll('[data-fv]').forEach(i => i.onchange = pinta); pinta();
+    box.parentElement.addEventListener('click', ev => { if (ev.target === box.parentElement) res(); });
+    box.querySelector('#fx-x').onclick = () => { close(); res(); };
+    box.querySelector('#fx-ok').onclick = ev => busy(ev.currentTarget, async () => {
+      const ids = marcadas(); if (!ids.length) throw new Error('Palomea al menos una nota');
+      const d = suma() - f.total;
+      if (Math.abs(d) >= 0.5 && !(await confirmar(`Las notas suman ${money(suma())} y la factura es de ${money(f.total)} (diferencia ${money(d)}). ¿Marcarlas de todos modos?`, 'Sí, marcar'))) return;
+      const { error: e2 } = await sb.from('ventas').update({ facturada: true, folio_factura: folioTxt || nombreArchivo }).in('id', ids);
+      if (e2) throw e2;
+      toast(`${ids.length} notas marcadas con la factura ${f.serie}${f.folio}`, 'ok'); close(); res();
+    });
+  }));
+}
+
 function mostrarArqueo(main, r) {
   const tc = cfg('tolerancia_caja') || 10, tl = cfg('tolerancia_litros') || 40;
   const dc = num(r.diferencia_caja), dl = r.diferencia_litros === null ? null : num(r.diferencia_litros), dg = r.diferencia_garrafones_nuevos;
@@ -978,8 +1045,19 @@ const VISTAS_DUENO = {
     const desde = S.mesCont + '-01', hasta = addDays(addDays(desde, 32).slice(0, 8) + '01', -1);
     main.innerHTML = `<div class="card row"><h2 style="margin:0">Reporte para el contador</h2><span class="sp"></span>
       <label style="margin:0">Mes</label><input type="month" id="ct-mes" value="${S.mesCont}" style="width:auto;padding:8px">
-      <button class="btn" id="ct-xls">Descargar Excel</button></div><div id="ct-body" class="empty">Cargando…</div>`;
+      <button class="btn" id="ct-xls">Descargar Excel</button></div>
+      <div class="card"><div class="row"><div><h2 style="margin:0">Subir factura del SAT</h2>
+        <span class="mut small">Elige el archivo <b>XML</b> de la factura. La app encuentra la empresa por su RFC y las notas que cubre.</span></div><span class="sp"></span>
+        <label class="btn sec" style="margin:0">Subir XML<input type="file" id="ct-xml" accept=".xml,text/xml,application/xml" multiple hidden></label></div></div>
+      <div id="ct-body" class="empty">Cargando…</div>`;
     document.getElementById('ct-mes').onchange = e => { S.mesCont = e.target.value; VISTAS_DUENO.contador(main); };
+    document.getElementById('ct-xml').onchange = async e => {
+      const files = [...e.target.files]; e.target.value = '';
+      for (const f of files) {
+        try { await facturaXML(await f.text(), f.name); } catch (err) { toast(`${f.name}: ${errMsg(err)}`, 'bad'); }
+      }
+      VISTAS_DUENO.contador(main);
+    };
     const det = await fetchAll(() => sb.from('venta_detalle').select('cantidad,importe,iva_tasa,producto_id,ventas!inner(id,fecha,forma_pago,cliente_id,cancelada,facturada,folio_factura,canal)')
       .gte('ventas.fecha', inicioMX(desde)).lt('ventas.fecha', inicioMX(addDays(hasta, 1))).eq('ventas.cancelada', false));
     const { data: gastos } = await sb.from('gastos').select('*').gte('fecha', inicioMX(desde)).lt('fecha', inicioMX(addDays(hasta, 1))).order('fecha');
