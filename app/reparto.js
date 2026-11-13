@@ -346,6 +346,9 @@ const VISTAS_REPARTO = {
 function arqueoReparto(main, x) {
   const tc = cfg('tolerancia_caja') || 10;
   const al = (ok, txt) => `<div class="alert ${ok ? 'ok' : 'bad'}">${txt}</div>`;
+  const dueno = S.perfil.rol === 'dueno', dcj = num(x.diferencia_caja);
+  // al repartidor solo se le avisa si falta dinero; si cuadra o sobra, "corte bien" (el dueño ve el detalle)
+  const msgCaja = full => dueno ? full : dcj < 0 ? al(false, `Faltan ${money(-dcj)} de efectivo.`) : al(true, '✓ Tu corte está bien.');
   main.innerHTML = `<div class="card" style="max-width:600px;margin:0 auto">
     <h1>Turno cerrado</h1><p class="mut">Hora de salida: <b>${fmtHora(new Date())}</b></p>
     ${x.tipo === 'camioneta' ? `<h3>Garrafones</h3><table><tbody>
@@ -359,14 +362,14 @@ function arqueoReparto(main, x) {
         <tr><td>Cobrado en efectivo</td><td class="n">${money(x.cobrado_efectivo)}</td></tr>
         <tr><td>Cobrado por transferencia</td><td class="n">${money(x.cobrado_transferencia)}</td></tr>
         <tr><td><b>Efectivo que trae</b></td><td class="n"><b>${money(x.efectivo_contado)}</b></td></tr></tbody></table>
-      ${al(Math.abs(num(x.diferencia_caja)) <= tc, `Diferencia de efectivo: ${money(x.diferencia_caja)}${num(x.diferencia_caja) === 0 ? ' · Cuadra' : num(x.diferencia_caja) < 0 ? ' · Falta dinero' : ' · Sobra dinero'}`)}` : `
+      ${msgCaja(al(Math.abs(num(x.diferencia_caja)) <= tc, `Diferencia de efectivo: ${money(x.diferencia_caja)}${num(x.diferencia_caja) === 0 ? ' · Cuadra' : num(x.diferencia_caja) < 0 ? ' · Falta dinero' : ' · Sobra dinero'}`))}` : `
     <h3>Dinero</h3><table><tbody>
       <tr><td>Caja chica inicial</td><td class="n">${money(x.caja_inicial)}</td></tr>
       <tr><td>Cobrado en efectivo</td><td class="n">${money(x.cobrado_efectivo)}</td></tr>
-      <tr><td><b>Efectivo esperado</b></td><td class="n"><b>${money(x.efectivo_esperado)}</b></td></tr>
+      ${dueno ? `<tr><td><b>Efectivo esperado</b></td><td class="n"><b>${money(x.efectivo_esperado)}</b></td></tr>` : ''}
       <tr><td><b>Efectivo que trae</b></td><td class="n"><b>${money(x.efectivo_contado)}</b></td></tr>
       <tr><td>Cobrado por transferencia</td><td class="n">${money(x.cobrado_transferencia)}</td></tr></tbody></table>
-    ${al(Math.abs(num(x.diferencia_caja)) <= tc, `Diferencia de caja: ${money(x.diferencia_caja)}${num(x.diferencia_caja) === 0 ? ' · Cuadra' : Math.abs(num(x.diferencia_caja)) <= tc ? ' · Dentro de la tolerancia' : num(x.diferencia_caja) < 0 ? ' · Falta dinero' : ' · Sobra dinero'}`)}
+    ${msgCaja(al(Math.abs(num(x.diferencia_caja)) <= tc, `Diferencia de caja: ${money(x.diferencia_caja)}${num(x.diferencia_caja) === 0 ? ' · Cuadra' : Math.abs(num(x.diferencia_caja)) <= tc ? ' · Dentro de la tolerancia' : num(x.diferencia_caja) < 0 ? ' · Falta dinero' : ' · Sobra dinero'}`))}
     ${x.pedidos_pendientes ? `<div class="alert warn">Quedan ${x.pedidos_pendientes} pedidos sin entregar.</div>` : ''}`}
     <button class="btn big" onclick="S.tab=null;boot()">Listo</button></div>`;
 }

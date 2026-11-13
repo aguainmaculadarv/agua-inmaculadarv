@@ -578,11 +578,11 @@ const VISTAS_PLANTA = {
       const dif = Math.round((ef - esperado) * 100) / 100;
       if (S.primerConteo?.turno !== S.turno.id) S.primerConteo = { turno: S.turno.id, ef };
       const primero = S.primerConteo.ef;
-      if (dif !== 0) {
-        const msg = dif < 0 ? `Te <b>faltan ${money(-dif)}</b> en caja.` : `Te <b>sobran ${money(dif)}</b> en caja.`;
-        const seguir = await confirmar(`${msg}<br><br>Vuelve a contar o repón la diferencia y corrige el efectivo. Si ya revisaste, puedes cerrar así.`, 'Cerrar así', 'Volver a contar');
+      // Solo se avisa si falta dinero; si cuadra o sobra, se les dice que el corte está bien (el sobrante lo ve el dueño).
+      if (dif < 0) {
+        const seguir = await confirmar(`Te <b>faltan ${money(-dif)}</b> en caja.<br><br>Vuelve a contar o repón la diferencia y corrige el efectivo. Si ya revisaste, puedes cerrar así.`, 'Cerrar así', 'Volver a contar');
         if (!seguir) { const i = document.getElementById('ct-ef'); i.focus(); i.select(); return; }
-      } else if (!(await confirmar('La caja cuadra exacto. ¿Cerrar el turno? Después ya no podrás registrar ventas en él.', 'Sí, cerrar'))) return;
+      } else if (!(await confirmar('✓ <b>Tu corte está bien.</b> ¿Cerrar el turno? Después ya no podrás registrar ventas en él.', 'Sí, cerrar'))) return;
       let notas = val('ct-n') || '';
       if (primero !== ef) notas = (notas ? notas + ' · ' : '') + `Primer conteo: ${money(primero)} (diferencia ${money(primero - esperado)})`;
       const fm = await subirFoto('ct-fm', 'medidor'), fc = await subirFoto('ct-fc', 'caja');
@@ -608,10 +608,12 @@ function mostrarArqueo(main, r) {
       <tr><td>Ventas en efectivo</td><td class="n">${money(r.ventas_efectivo)}</td></tr>
       <tr><td>Ventas por transferencia</td><td class="n">${money(r.ventas_transferencia)}</td></tr>
       <tr><td>Pagos hechos con la caja</td><td class="n">-${money(r.gastos_caja)}</td></tr>
-      <tr><td><b>Efectivo esperado</b> (incluye caja chica)</td><td class="n"><b>${money(r.efectivo_esperado)}</b></td></tr>
+      ${S.perfil.rol === 'dueno' ? `<tr><td><b>Efectivo esperado</b> (incluye caja chica)</td><td class="n"><b>${money(r.efectivo_esperado)}</b></td></tr>` : ''}
       <tr><td><b>Efectivo contado</b></td><td class="n"><b>${money(r.efectivo_contado)}</b></td></tr>
     </tbody></table>
-    <div class="alert ${est(Math.abs(dc) <= tc)}" style="margin-top:10px">Diferencia de caja: ${dc >= 0 ? '+' : ''}${money(dc)} ${dc === 0 ? '· Cuadra exacto' : Math.abs(dc) <= tc ? '· Dentro de la tolerancia' : dc < 0 ? '· Falta dinero' : '· Sobra dinero'}</div>
+    ${S.perfil.rol === 'dueno'
+      ? `<div class="alert ${est(Math.abs(dc) <= tc)}" style="margin-top:10px">Diferencia de caja: ${dc >= 0 ? '+' : ''}${money(dc)} ${dc === 0 ? '· Cuadra exacto' : Math.abs(dc) <= tc ? '· Dentro de la tolerancia' : dc < 0 ? '· Falta dinero' : '· Sobra dinero'}</div>`
+      : dc < 0 ? `<div class="alert bad" style="margin-top:10px">Faltan ${money(-dc)} en caja.</div>` : `<div class="alert ok" style="margin-top:10px">✓ Tu corte está bien.</div>`}
     <h3>Agua</h3>
     <table><tbody>
       <tr><td>Litros según medidor</td><td class="n">${r.litros_medidor === null ? '—' : fmtN(r.litros_medidor, 1)}</td></tr>
