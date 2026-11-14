@@ -146,6 +146,8 @@ pinta();
 
 const txtFila = e => !e ? '' : e.antes > 0 ? `Hay <b>${e.antes}</b> ${e.antes === 1 ? 'pedido' : 'pedidos'} antes del tuyo.` : 'Eres el siguiente en la fila.';
 const txtTiempo = e => !e ? '' : e.abierto ? (e.tiempo || '') : `Ahorita estamos cerrados: tu pedido se entrega ${e.abre}.`;
+const horaTxt = h => { h = Number(h); if (!h) return ''; const hh = Math.floor(h), mm = Math.round((h - hh) * 60); return `${hh > 12 ? hh - 12 : hh}:${String(mm).padStart(2, '0')} ${hh >= 12 ? 'p.m.' : 'a.m.'}`; };
+const esc2 = t => String(t ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const estadoFila = async tel => { try { const { data } = await sb.rpc('estado_pedido_en_linea', { p_telefono: tel }); return data || null; } catch { return null; } };
 async function pintaFila(tel) {
   const e = tel && tel.length === 10 ? await estadoFila(tel) : await estadoFila('');
@@ -154,6 +156,10 @@ async function pintaFila(tel) {
     box.innerHTML = `<h2>Tu pedido #${e.id} va en camino</h2>${e.marcas ? `<p style="font-size:17px"><b>${Object.entries(e.marcas).map(([m, n]) => n + ' ' + m).join(' · ')}</b></p>` : ''}
       <p>${txtFila(e)}</p><p class="mut">${txtTiempo(e)}</p><p class="mut small">Para cambiarlo o cancelarlo, escríbenos por WhatsApp con tu número de pedido.</p>`;
     box.classList.remove('hidden');
+  } else if (e.acepta === false) {
+    box.innerHTML = `<h2>Por hoy ya no recibimos pedidos</h2><p>Los pedidos a domicilio se reciben hasta las ${horaTxt(e.corte)} Vuelve a pedir <b>${esc2(e.abre)}</b></p>
+      <p class="mut small">¿Es urgente? Escríbenos por WhatsApp al 33 3033 4510.</p>`;
+    box.classList.remove('hidden'); $('form').classList.add('hidden');
   } else if (!e.abierto) {
     box.innerHTML = `<div class="alert inf" style="margin:0">${txtTiempo(e)} Puedes dejar tu pedido desde ahora.</div>`;
     box.classList.remove('hidden');
@@ -179,6 +185,7 @@ $('enviar').onclick = async () => {
       if (r.motivo === 'pendiente') { await pintaFila(tel); window.scrollTo(0, 0); return aviso('Ya tienes un pedido en camino (arriba ves cómo va). Si necesitas cambiarlo, escríbenos por WhatsApp.', 'inf'); }
       if (r.motivo === 'saturado') return aviso('En este momento hay muchos pedidos. Intenta en unos minutos o escríbenos por WhatsApp.');
       if (r.motivo === 'telefono') return aviso('Revisa tu teléfono: deben ser 10 dígitos.');
+      if (r.motivo === 'horario') { await pintaFila(tel); window.scrollTo(0, 0); return aviso('Por hoy ya no recibimos pedidos a domicilio. Vuelve a pedir mañana a partir de las 9:00 a.m.'); }
       if (r.motivo === 'alcalina') return aviso('Por ahora no tenemos agua alcalina a domicilio. Pide purificada o escríbenos por WhatsApp.');
       if (r.motivo === 'cantidad') return aviso('Puedes pedir de 1 a 20 garrafones en línea. Para más, escríbenos por WhatsApp.');
       return aviso('Por ahora no podemos recibir pedidos en línea. Escríbenos por WhatsApp.');
