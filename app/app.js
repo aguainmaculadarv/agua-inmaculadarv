@@ -769,13 +769,15 @@ const VISTAS_DUENO = {
     const per = selectorPeriodo(() => VISTAS_DUENO.resumen(main));
     main.innerHTML = per.html + '<div id="rs" class="empty">Calculando…</div>';
     per.bind();
-    const [{ data: r, error }, { data: fijos }, { data: mants }, { data: abiertos }, dom, entEmp] = await Promise.all([
+    const [{ data: r, error }, { data: fijos }, { data: mants }, { data: abiertos }, dom, entEmp, vPer] = await Promise.all([
       sb.rpc('resumen_periodo', { p_desde: S.periodo.desde, p_hasta: S.periodo.hasta }),
       sb.from('gastos_fijos').select('*').eq('activo', true),
       sb.from('mantenimientos').select('*').eq('activo', true),
       sb.from('turnos').select('id,abierto_en,usuario_id').eq('estado', 'abierto'),
       domicilioPeriodo(),
       fetchAll(() => sb.from('entregas').select('id,llenos,nuevos,ventas(total,forma_pago,cancelada)')
+        .gte('fecha', inicioMX(S.periodo.desde)).lt('fecha', inicioMX(addDays(S.periodo.hasta, 1))).order('id')).catch(() => []),
+      fetchAll(() => sb.from('ventas').select('id,usuario_id,total,forma_pago').eq('cancelada', false)
         .gte('fecha', inicioMX(S.periodo.desde)).lt('fecha', inicioMX(addDays(S.periodo.hasta, 1))).order('id')).catch(() => [])
     ]);
     if (error) throw error;
@@ -783,6 +785,16 @@ const VISTAS_DUENO = {
     const emp = { efectivo: 0, transferencia: 0, credito: 0, garr: 0, n: 0 };
     (entEmp || []).forEach(e => { emp.n++; emp.garr += num(e.llenos) + num(e.nuevos); const v = e.ventas; if (v && !v.cancelada && emp[v.forma_pago] !== undefined) emp[v.forma_pago] += num(v.total); });
     const empTot = emp.efectivo + emp.transferencia + emp.credito;
+    // Cuadritos por persona: efectivo / transferencia / crédito (repartidor incluye domicilio)
+    const porPer = {};
+    (vPer || []).forEach(v => { const k = v.usuario_id || 'x'; const o = porPer[k] = porPer[k] || { efectivo: 0, transferencia: 0, credito: 0 }; if (o[v.forma_pago] !== undefined) o[v.forma_pago] += num(v.total); });
+    const reps = S.perfiles.filter(p => p.rol === 'repartidor');
+    if (dom.total) { const k = reps.length === 1 ? reps[0].id : 'dom'; const o = porPer[k] = porPer[k] || { efectivo: 0, transferencia: 0, credito: 0 }; o.efectivo += dom.efectivo; o.transferencia += dom.transferencia; }
+    const orden = k => ({ ventanilla: 0, dueno: 1, repartidor: 2 }[S.perfiles.find(p => p.id === k)?.rol] ?? 3);
+    const cuadros = Object.entries(porPer).sort((a, b) => orden(a[0]) - orden(b[0])).map(([k, o]) => {
+      const nomP = k === 'dom' ? 'Domicilio' : S.perfiles.find(p => p.id === k)?.nombre || 'Sin usuario';
+      return `<div class="kpi"><div class="l">${esc(nomP)}</div><div class="v" style="font-size:20px">${money0(o.efectivo)} / ${money0(o.transferencia)}</div>
+        <div class="s">Efectivo / Transferencia${o.credito ? ` · Crédito ${money0(o.credito)}` : ''}</div></div>`; }).join('');
     const tablaJavier = `<div class="card" style="margin-bottom:16px"><h2>Reparto de Javier</h2><div class="tw"><table>
       <thead><tr><th></th><th class="n">Efectivo</th><th class="n">Transferencia</th><th class="n">Crédito</th><th class="n">Total</th><th class="n">Garrafones</th></tr></thead><tbody>
       <tr><td><b>Empresas</b><br><span class="mut small">${fmtN(emp.n)} entregas</span></td><td class="n">${money0(emp.efectivo)}</td><td class="n">${money0(emp.transferencia)}</td><td class="n">${money0(emp.credito)}</td><td class="n"><b>${money0(empTot)}</b></td><td class="n">${fmtN(emp.garr)}</td></tr>
@@ -818,6 +830,7 @@ const VISTAS_DUENO = {
       <div class="kpi"><div class="l">Efectivo / Transferencia</div><div class="v" style="font-size:20px">${money0(num(r.efectivo) + dom.efectivo)} / ${money0(num(r.transferencia) + dom.transferencia)}</div><div class="s">A crédito: ${money0(r.credito)}</div></div>
       <div class="kpi"><div class="l">Utilidad estimada</div><div class="v" style="color:${utilidad >= 0 ? 'var(--ok)' : 'var(--bad)'}">${money0(utilidad)}</div><div class="s">Margen ${pct(margen)}</div></div>
     </div>
+    ${cuadros ? `<h3 style="margin:4px 0 8px">Por persona</h3><div class="grid g4" style="margin-bottom:16px">${cuadros}</div>` : ''}
     ${tablaJavier}
     <div class="grid g2">
       <div class="card"><h2>Cómo sale la utilidad</h2><table><tbody>
