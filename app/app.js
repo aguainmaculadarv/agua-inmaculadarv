@@ -130,6 +130,7 @@ async function cargarCatalogos() {
   for (const r of [c, p, a, pi, cl]) if (r.error) throw r.error;
   S.config = Object.fromEntries(c.data.map(x => [x.clave, x]));
   S.productos = p.data; S.articulos = a.data; S.pi = pi.data; S.clientes = cl.data;
+  try { const { data: cp } = await sb.from('cliente_precios').select('*'); S.cprecios = cp || []; } catch { S.cprecios = []; }
   if (S.perfil?.rol === 'dueno') {
     const { data } = await sb.from('perfiles').select('*').order('nombre');
     S.perfiles = data || [];
@@ -297,6 +298,8 @@ const VISTAS_PLANTA = {
     </div>`;
     const precioDe = p => {
       const c = S.clientes.find(x => x.id == S.clienteId);
+      const esp = c && (S.cprecios || []).find(x => x.cliente_id === c.id && x.producto_id === p.id);
+      if (esp) return num(esp.precio);
       if (c && c.precio_especial && p.nombre === 'Relleno garrafón') return num(c.precio_especial);
       if (c && c.tipo === 'distribuidor') return num(p.precio_domicilio ?? p.precio);
       return num(p.precio);
@@ -1357,6 +1360,10 @@ function editarCliente(c, onSave) {
       ${f('ec-pe', 'Precio especial por relleno (autorizado por ti)', c.precio_especial, 'number')}
     </div>
     ${f('ec-dom', 'Domicilio', c.domicilio)}${f('ec-map', 'Liga de Google Maps', c.maps_url)}
+    <h3 style="margin-top:8px">Precios especiales</h3>
+    <p class="mut small" style="margin-top:-6px">Déjalo vacío para cobrar el precio normal. Ventanilla y Javier lo aplican solos al elegir este cliente.</p>
+    <div class="grid g3">${S.productos.filter(p => p.activo !== false).map(p => { const cp = (S.cprecios || []).find(x => x.cliente_id === c.id && x.producto_id === p.id);
+      return `<div class="field"><label>${esc(p.nombre)} <span class="mut small">(normal ${money(p.precio)})</span></label><input type="number" inputmode="decimal" class="ec-pp" data-pid="${p.id}" value="${cp ? cp.precio : ''}"></div>`; }).join('')}</div>
     <h3 style="margin-top:8px">Ruta y crédito</h3>
     <div class="grid g2">${f('ec-ct', 'Contacto (para cobrar o avisar)', c.contacto)}${f('ec-qr', 'Quién recibe', c.quien_recibe)}
       <div class="field"><label>Pago</label><select id="ec-dc">${[['', 'Sin definir (queda a crédito)'], ['0', 'Contado (paga al entregar)'], ['7', 'Crédito 7 días'], ['15', 'Crédito 15 días'], ['30', 'Crédito 30 días']].map(([v, t]) => `<option value="${v}" ${String(c.dias_credito ?? '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
@@ -1380,6 +1387,13 @@ function editarCliente(c, onSave) {
       let id = c.id;
       if (nuevo) { const { data, error } = await sb.from('clientes').insert(row).select('id').single(); if (error) throw error; id = data.id; }
       else { const { error } = await sb.from('clientes').update(row).eq('id', id); if (error) throw error; }
+      // precios especiales por producto
+      const pps = [...box.querySelectorAll('.ec-pp')].map(i => ({ pid: Number(i.dataset.pid), v: i.value.trim() }));
+      const poner = pps.filter(x => x.v !== '' && !isNaN(Number(x.v))).map(x => ({ cliente_id: id, producto_id: x.pid, precio: Number(x.v) }));
+      const quitar = pps.filter(x => x.v === '').map(x => x.pid);
+      if (poner.length) { const { error } = await sb.from('cliente_precios').upsert(poner); if (error) throw error; }
+      if (quitar.length && !nuevo) { const { error } = await sb.from('cliente_precios').delete().eq('cliente_id', id).in('producto_id', quitar); if (error) throw error; }
+      try { const { data: cp } = await sb.from('cliente_precios').select('*'); S.cprecios = cp || []; } catch {}
       const file = document.getElementById('ec-cons').files[0];
       if (file) {
         const ext = file.type === 'application/pdf' ? 'pdf' : 'jpg';
