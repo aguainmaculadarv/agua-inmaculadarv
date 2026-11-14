@@ -560,7 +560,7 @@ const VISTAS_PLANTA = {
       ${fotoInput('ct-fm', 'Foto del medidor')}
       <div class="field"><label>Garrafones nuevos (envases) que quedan</label><input type="number" id="ct-garr" inputmode="numeric"></div>
       <div class="field"><label>Efectivo total en caja, contando la caja chica</label><input type="number" id="ct-ef" inputmode="decimal" placeholder="Cuenta todo el dinero de la caja"></div>
-      ${fotoInput('ct-fc', 'Foto del dinero contado (opcional)')}
+      ${fotoInput('ct-fc', S.perfil.rol === 'dueno' ? 'Foto del dinero contado (opcional)' : 'Foto del dinero contado (obligatoria)')}
       <div class="field"><label>Notas de cierre</label><textarea id="ct-n"></textarea></div>
       <button class="btn big bad" id="ct-b">Cerrar turno y hacer arqueo</button>
     </div>`;
@@ -568,6 +568,7 @@ const VISTAS_PLANTA = {
       const med = nval('ct-med'), ef = nval('ct-ef');
       if (med === null) throw new Error('Escribe la lectura final del medidor');
       if (ef === null) throw new Error('Escribe el efectivo contado');
+      if (S.perfil.rol !== 'dueno' && !document.getElementById('ct-fc')?.files?.length) throw new Error('Toma la foto del dinero contado');
       if (med < num(S.turno.medidor_inicial)) throw new Error('La lectura final no puede ser menor a la inicial');
       // Revisión de caja: primero cuentan a ciegas; antes de cerrar se les dice si falta o sobra.
       const [vr, gr] = await Promise.all([
@@ -589,8 +590,8 @@ const VISTAS_PLANTA = {
       const { data: r, error } = await sb.rpc('cerrar_turno', { p_turno_id: S.turno.id, p_medidor_fin: med, p_garrafones_fin: nval('ct-garr'),
         p_efectivo_contado: ef, p_foto_medidor: fm, p_foto_caja: fc, p_notas: notas || null });
       if (error) throw error;
-      S.turno = null; S.primerConteo = null;
-      mostrarArqueo(main, r);
+      const abierto = S.turno.abierto_en; S.turno = null; S.primerConteo = null;
+      mostrarArqueo(main, { ...r, _abierto: abierto });
     });
   }
 };
@@ -662,14 +663,45 @@ async function facturaXML(texto, nombreArchivo) {
   }));
 }
 
+// Imagen del corte para mandar por WhatsApp (solo dinero; sin "esperado" ni litros)
+async function canvasCorte(r) {
+  const W = 720, P = 44, tmp = document.createElement('canvas'); tmp.width = W; tmp.height = 1600;
+  const g = tmp.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, W, tmp.height); g.fillStyle = '#10323D';
+  const F = (px, b) => g.font = `${b ? 'bold ' : ''}${px}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
+  let y = P; const txt = (t, x, al = 'left') => { g.textAlign = al; g.fillText(t, x, y); };
+  const linea = () => { y += 16; g.fillStyle = '#C9D6DA'; g.fillRect(P, y, W - 2 * P, 2); g.fillStyle = '#10323D'; y += 26; };
+  const par = (a, b, bold) => { F(27, bold); txt(a, P); txt(b, W - P, 'right'); y += 44; };
+  const logo = await new Promise(res => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = 'logo.jpg'; });
+  if (logo) { const lw = 300, lh = logo.height * lw / logo.width; g.drawImage(logo, (W - lw) / 2, y, lw, lh); y += lh + 10; }
+  y += 30; F(36, true); txt('CORTE DE CAJA', W / 2, 'center'); y += 40;
+  const fz = { timeZone: CFG.ZONA };
+  F(24); txt(`${new Date().toLocaleDateString('es-MX', { ...fz, weekday: 'long', day: 'numeric', month: 'long' })}`, W / 2, 'center'); y += 34;
+  txt(`${S.perfil.nombre || ''} · ${r._abierto ? fmtHora(r._abierto) + ' a ' : ''}${fmtHora(new Date())}`, W / 2, 'center'); y += 6;
+  linea();
+  par('Ventas en efectivo', money(r.ventas_efectivo));
+  par('Ventas por transferencia', money(r.ventas_transferencia));
+  par('Pagos hechos con la caja', '-' + money(r.gastos_caja));
+  linea();
+  par('Efectivo contado', money(r.efectivo_contado), true);
+  y += 10;
+  const dc = num(r.diferencia_caja);
+  g.fillStyle = dc < 0 ? '#FDECEC' : '#E6F4EC'; g.fillRect(P, y - 34, W - 2 * P, 64); g.fillStyle = dc < 0 ? '#B42318' : '#1F7A4D';
+  F(30, true); txt(dc < 0 ? `Faltan ${money(-dc)}` : '✓ Corte correcto', W / 2, 'center'); y += 70; g.fillStyle = '#10323D';
+  F(20); g.fillStyle = '#5B7680'; txt('Agua Inmaculada Real del Valle', W / 2, 'center'); y += P;
+  const out = document.createElement('canvas'); out.width = W; out.height = y; out.getContext('2d').drawImage(tmp, 0, 0);
+  return out;
+}
+
 function mostrarArqueo(main, r) {
   const tc = cfg('tolerancia_caja') || 10, tl = cfg('tolerancia_litros') || 40;
   const dc = num(r.diferencia_caja), dl = r.diferencia_litros === null ? null : num(r.diferencia_litros), dg = r.diferencia_garrafones_nuevos;
   const est = (ok, warn) => ok ? 'ok' : (warn ? 'warn' : 'bad');
+  const dueno = S.perfil.rol === 'dueno';
   main.innerHTML = `
   <div class="card" style="max-width:640px;margin:0 auto">
     <h1>Turno cerrado</h1>
     <p class="mut">Hora de salida: <b>${fmtHora(new Date())}</b></p>
+    <div class="alert inf"><b>Último paso:</b> manda tu corte al grupo con el botón verde de abajo.</div>
     <h3>Arqueo de caja</h3>
     <table><tbody>
       <tr><td>Ventas en efectivo</td><td class="n">${money(r.ventas_efectivo)}</td></tr>
@@ -681,15 +713,27 @@ function mostrarArqueo(main, r) {
     ${S.perfil.rol === 'dueno'
       ? `<div class="alert ${est(Math.abs(dc) <= tc)}" style="margin-top:10px">Diferencia de caja: ${dc >= 0 ? '+' : ''}${money(dc)} ${dc === 0 ? '· Cuadra exacto' : Math.abs(dc) <= tc ? '· Dentro de la tolerancia' : dc < 0 ? '· Falta dinero' : '· Sobra dinero'}</div>`
       : dc < 0 ? `<div class="alert bad" style="margin-top:10px">Faltan ${money(-dc)} en caja.</div>` : `<div class="alert ok" style="margin-top:10px">✓ Tu corte está bien.</div>`}
-    <h3>Agua</h3>
+    ${dueno ? `<h3>Agua</h3>
     <table><tbody>
       <tr><td>Litros según medidor</td><td class="n">${r.litros_medidor === null ? '—' : fmtN(r.litros_medidor, 1)}</td></tr>
       <tr><td>Litros vendidos (${fmtN(r.garrafones_vendidos)} garrafones)</td><td class="n">${fmtN(r.litros_vendidos, 1)}</td></tr>
     </tbody></table>
     ${dl === null ? '' : `<div class="alert ${est(Math.abs(dl) <= tl, dl < 0)}" style="margin-top:10px">Diferencia: ${fmtN(dl, 1)} litros (${fmtN(dl / 20, 1)} garrafones) ${Math.abs(dl) <= tl ? '· Cuadra' : dl > 0 ? '· Salió más agua de la vendida' : '· Se vendió más de lo que marca el medidor'}</div>`}
-    ${dg === null || dg === undefined ? '' : `<h3>Garrafones nuevos</h3><div class="alert ${est(dg === 0)}">Vendidos: ${fmtN(r.garrafones_nuevos_vendidos)} · Diferencia en conteo: ${dg > 0 ? '+' : ''}${dg} ${dg === 0 ? '· Cuadra' : ''}</div>`}
-    <button class="btn big" style="margin-top:12px" onclick="S.tab=null;boot()">Listo</button>
+    ${dg === null || dg === undefined ? '' : `<h3>Garrafones nuevos</h3><div class="alert ${est(dg === 0)}">Vendidos: ${fmtN(r.garrafones_nuevos_vendidos)} · Diferencia en conteo: ${dg > 0 ? '+' : ''}${dg} ${dg === 0 ? '· Cuadra' : ''}</div>`}` : ''}
+    <button class="btn big ok" style="margin-top:12px" id="aq-wa">Enviar corte por WhatsApp</button>
+    <button class="btn big ghost" style="margin-top:8px" onclick="S.tab=null;boot()">Listo</button>
   </div>`;
+  document.getElementById('aq-wa').onclick = e => busy(e.currentTarget, async () => {
+    const cv = await canvasCorte(r);
+    const blob = await new Promise(res => cv.toBlob(res, 'image/png'));
+    const nombre = `Corte_${fechaMX()}_${(S.perfil.nombre || 'turno').normalize('NFD').replace(/[^\w]+/g, '_')}.png`;
+    const file = new File([blob], nombre, { type: 'image/png' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: 'Corte de caja' }); return; } catch (err) { if (err && err.name === 'AbortError') return; }
+    }
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nombre; document.body.appendChild(a); a.click(); a.remove();
+    toast('Imagen del corte descargada. Mándala al grupo por WhatsApp.', 'ok');
+  });
 }
 
 /* =====================================================================
