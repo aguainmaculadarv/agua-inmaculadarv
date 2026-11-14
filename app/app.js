@@ -766,14 +766,26 @@ const VISTAS_DUENO = {
     const per = selectorPeriodo(() => VISTAS_DUENO.resumen(main));
     main.innerHTML = per.html + '<div id="rs" class="empty">Calculando…</div>';
     per.bind();
-    const [{ data: r, error }, { data: fijos }, { data: mants }, { data: abiertos }, dom] = await Promise.all([
+    const [{ data: r, error }, { data: fijos }, { data: mants }, { data: abiertos }, dom, entEmp] = await Promise.all([
       sb.rpc('resumen_periodo', { p_desde: S.periodo.desde, p_hasta: S.periodo.hasta }),
       sb.from('gastos_fijos').select('*').eq('activo', true),
       sb.from('mantenimientos').select('*').eq('activo', true),
       sb.from('turnos').select('id,abierto_en,usuario_id').eq('estado', 'abierto'),
-      domicilioPeriodo()
+      domicilioPeriodo(),
+      fetchAll(() => sb.from('entregas').select('id,llenos,nuevos,ventas(total,forma_pago,cancelada)')
+        .gte('fecha', inicioMX(S.periodo.desde)).lt('fecha', inicioMX(addDays(S.periodo.hasta, 1))).order('id')).catch(() => [])
     ]);
     if (error) throw error;
+    // Reparto de Javier: empresas (entregas con su venta) y domicilio (pedidos entregados)
+    const emp = { efectivo: 0, transferencia: 0, credito: 0, garr: 0, n: 0 };
+    (entEmp || []).forEach(e => { emp.n++; emp.garr += num(e.llenos) + num(e.nuevos); const v = e.ventas; if (v && !v.cancelada && emp[v.forma_pago] !== undefined) emp[v.forma_pago] += num(v.total); });
+    const empTot = emp.efectivo + emp.transferencia + emp.credito;
+    const tablaJavier = `<div class="card" style="margin-bottom:16px"><h2>Reparto de Javier</h2><div class="tw"><table>
+      <thead><tr><th></th><th class="n">Efectivo</th><th class="n">Transferencia</th><th class="n">Crédito</th><th class="n">Total</th><th class="n">Garrafones</th></tr></thead><tbody>
+      <tr><td><b>Empresas</b><br><span class="mut small">${fmtN(emp.n)} entregas</span></td><td class="n">${money0(emp.efectivo)}</td><td class="n">${money0(emp.transferencia)}</td><td class="n">${money0(emp.credito)}</td><td class="n"><b>${money0(empTot)}</b></td><td class="n">${fmtN(emp.garr)}</td></tr>
+      <tr><td><b>Domicilio</b><br><span class="mut small">${fmtN(dom.n)} pedidos</span></td><td class="n">${money0(dom.efectivo)}</td><td class="n">${money0(dom.transferencia)}</td><td class="n">—</td><td class="n"><b>${money0(dom.total)}</b></td><td class="n">${fmtN(dom.garrafones)}</td></tr>
+      <tr><td><b>Total Javier</b></td><td class="n"><b>${money0(emp.efectivo + dom.efectivo)}</b></td><td class="n"><b>${money0(emp.transferencia + dom.transferencia)}</b></td><td class="n"><b>${money0(emp.credito)}</b></td><td class="n"><b>${money0(empTot + dom.total)}</b></td><td class="n"><b>${fmtN(emp.garr + dom.garrafones)}</b></td></tr>
+      </tbody></table></div><p class="mut small">Crédito de empresas = lo que quedó por cobrar de esas entregas. Lo que las empresas recogen en planta no entra aquí.</p></div>`;
     const dias = diasPeriodo();
     const relleno = S.productos.find(p => p.nombre === 'Relleno garrafón');
     const ventasTot = num(r.total) + dom.total, garrTot = num(r.garrafones) + dom.garrafones;
@@ -803,6 +815,7 @@ const VISTAS_DUENO = {
       <div class="kpi"><div class="l">Efectivo / Transferencia</div><div class="v" style="font-size:20px">${money0(num(r.efectivo) + dom.efectivo)} / ${money0(num(r.transferencia) + dom.transferencia)}</div><div class="s">A crédito: ${money0(r.credito)}</div></div>
       <div class="kpi"><div class="l">Utilidad estimada</div><div class="v" style="color:${utilidad >= 0 ? 'var(--ok)' : 'var(--bad)'}">${money0(utilidad)}</div><div class="s">Margen ${pct(margen)}</div></div>
     </div>
+    ${tablaJavier}
     <div class="grid g2">
       <div class="card"><h2>Cómo sale la utilidad</h2><table><tbody>
         <tr><td>Ventas planta y empresas</td><td class="n">${money(r.total)}</td></tr>
