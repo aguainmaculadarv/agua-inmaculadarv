@@ -953,13 +953,14 @@ const VISTAS_DUENO = {
       <div class="tw"><table><thead><tr><th>Fecha</th><th>Vendió</th><th>Productos</th><th>Cliente</th><th>Pago</th><th class="n">Total</th><th></th></tr></thead><tbody>
       ${data.map(v => `<tr><td>${fmtFecha(v.fecha)}</td><td>${nom(v.usuario_id)}</td><td>${v.venta_detalle.map(d => `${fmtN(d.cantidad)} ${esc(prod(d.producto_id))}`).join(', ')}</td><td>${cli(v.cliente_id)}</td>
         <td>${esc(v.forma_pago)}</td><td class="n">${money(v.total)}</td>
-        <td>${v.cancelada ? `<span class="tag bad" title="${esc(v.motivo_cancelacion)}">Cancelada</span>` : `<button class="btn sm ghost" data-cancel="${v.id}">Cancelar</button>`}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">Sin ventas</td></tr>'}
+        <td style="white-space:nowrap"><button class="btn sm sec" data-tkv="${v.id}">${v.firma ? 'Ticket y nota' : 'Ticket'}</button> ${v.cancelada ? `<span class="tag bad" title="${esc(v.motivo_cancelacion)}">Cancelada</span>` : `<button class="btn sm ghost" data-cancel="${v.id}">Cancelar</button>`}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">Sin ventas</td></tr>'}
       </tbody></table></div></div>
     <div class="card"><div class="row"><h2 style="margin:0">Domicilio</h2><span class="sp"></span><span class="tag inf">${fmtN(dom.n)} entregas · ${money(dom.total)}</span></div>
       <div class="tw"><table><thead><tr><th>Entregado</th><th>Cliente</th><th>Garrafones</th><th>Pago</th><th class="n">Total</th></tr></thead><tbody>
       ${dom.lista.map(p => `<tr><td>${fmtFecha(p.entregado_en)}</td><td>${esc(p.nombre)}</td><td>${esc(txtMarcas({ ...p, cantidad: p.entregado_cantidad }))}</td><td>${esc(p.forma_pago_real || '')}</td><td class="n">${money(p.monto_cobrado)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">Sin entregas a domicilio en este periodo</td></tr>'}
       </tbody></table></div></div>`;
     per.bind();
+    main.querySelectorAll('[data-tkv]').forEach(b => b.onclick = () => mostrarTicket(Number(b.dataset.tkv), false));
     main.querySelectorAll('[data-cancel]').forEach(b => b.onclick = () => modal(`<h2>Cancelar venta #${b.dataset.cancel}</h2>
       <div class="field"><label>Motivo</label><input type="text" id="cv-m" placeholder="ej. Se capturó dos veces"></div>
       <div class="row"><button class="btn ghost" data-close>Regresar</button><span class="sp"></span><button class="btn bad" id="cv-b">Cancelar venta</button></div>`,

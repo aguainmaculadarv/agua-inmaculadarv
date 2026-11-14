@@ -776,7 +776,8 @@ async function estadoCuenta(clienteId, mes) {
         + `<br><button class="btn sm ghost np" data-corr="${e.id}" style="margin-top:4px">Corregir</button>`,
       imp: v && !v.cancelada ? num(v.total) : 0, fp: v?.forma_pago }; })
     .concat((vp || []).filter(v => !ids.includes(v.id)).map(v => ({ fecha: v.fecha, folio: 'Ticket #' + v.id, llenos: cant(v, idRel), nuevos: cant(v, idNue), vacios: null,
-      recibio: (v.recibio ? esc(v.recibio) + '<br><small>en planta</small>' : 'Recogió en planta') + imgF(v.firma), imp: num(v.total), fp: v.forma_pago })))
+      recibio: (v.recibio ? esc(v.recibio) + '<br><small>en planta</small>' : 'Recogió en planta') + imgF(v.firma)
+        + (v.firma ? `<br><button class="btn sm ghost np" data-notav="${v.id}" style="margin-top:4px">Nota</button>` : ''), imp: num(v.total), fp: v.forma_pago })))
     .sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
   const tL = filas.reduce((s, x) => s + x.llenos, 0), tN = filas.reduce((s, x) => s + x.nuevos, 0), tV = filas.reduce((s, x) => s + num(x.vacios), 0);
   const tImp = filas.reduce((s, x) => s + x.imp, 0), tCred = filas.filter(x => x.fp === 'credito').reduce((s, x) => s + x.imp, 0);
@@ -807,6 +808,7 @@ async function estadoCuenta(clienteId, mes) {
       ${tel.length === 10 ? `<a class="btn sec" href="https://wa.me/52${tel}?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">Mensaje WhatsApp</a>` : ''}
       <button class="btn" id="ec-p">Guardar PDF</button></div>
     <p class="mut small">"Guardar PDF" abre la impresión: elige "Guardar como PDF" y luego mándalo por WhatsApp.</p>`, box => {
+    box.querySelectorAll('[data-notav]').forEach(b => b.onclick = () => busy(b, () => mostrarNotaVenta(Number(b.dataset.notav))));
     box.querySelectorAll('[data-corr]').forEach(b => b.onclick = () => {
       const e = (en || []).find(x => x.id == b.dataset.corr), v = venta(e.venta_id);
       let fp = v && !v.cancelada ? v.forma_pago : (c.dias_credito === 0 ? (c.forma_pago_habitual || 'efectivo') : 'credito');
