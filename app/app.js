@@ -1528,7 +1528,7 @@ async function mostrarTicket(ventaId, recienCobrada) {
     modal(`<h2>Ticket #${v.id}</h2>
       <pre style="background:#fff;border:1px dashed var(--line);border-radius:10px;padding:14px;font:14px/1.45 ui-monospace,Menlo,Consolas,monospace;overflow-x:auto;max-width:360px;margin:0 auto"><img src="logo.jpg" alt="Agua Inmaculada" style="display:block;width:80%;margin:0 auto 6px;filter:grayscale(1) contrast(1.4)">${L.map(l => l.b ? `<b${l.big ? ' style="font-size:16px"' : ''}>${esc(l.t)}</b>` : esc(l.t)).join('\n')}${qrImg ? `<img src="${qrImg}" alt="QR para pedir a domicilio" style="display:block;width:150px;margin:8px auto 0">` : ''}</pre>
       <div class="row" style="margin-top:14px"><button class="btn ghost" data-close>Cerrar</button><span class="sp"></span>
-        ${v.firma ? '<button class="btn sec" id="tk-n">Nota firmada</button>' : ''}<button class="btn" id="tk-p">${recienCobrada ? 'Imprimir' : 'Reimprimir'}</button></div>
+        ${v.cliente_id ? `<button class="btn sec" id="tk-n">${v.firma ? 'Nota firmada' : 'Nota para enviar'}</button>` : ''}<button class="btn" id="tk-p">${recienCobrada ? 'Imprimir' : 'Reimprimir'}</button></div>
       <p class="mut small">Para imprimir, la tableta Android necesita la app gratuita RawBT vinculada a la impresora Bluetooth. ${recienCobrada && v.forma_pago === 'efectivo' ? 'Al imprimir se abre el cajón.' : 'La reimpresión no abre el cajón.'}</p>`,
       (box, close) => {
         box.querySelector('#tk-p').onclick = () => { enviarImpresora(escpos(L, abrir, logo, qr)); close(); };

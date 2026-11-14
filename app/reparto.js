@@ -716,9 +716,9 @@ async function canvasNota({ e, v, c, folio, lugar, lineas }) {
   if (e.notas) { y += 30; F(22); txt('Notas: ' + e.notas, P); }
   linea(); y += 6;
   if (firma) { const bw = W - 2 * P, bh = 210, k = Math.min(bw / firma.width, bh / firma.height); g.drawImage(firma, P + (bw - firma.width * k) / 2, y, firma.width * k, firma.height * k); y += bh; }
-  else { y += 60; F(22); g.fillStyle = '#5B7680'; txt('(firma registrada en sistema)', W / 2, 'center'); g.fillStyle = '#10323D'; y += 30; }
+  else { y += 60; F(22); g.fillStyle = '#5B7680'; txt(e.firma ? '(firma registrada en sistema)' : '(firma en nota de papel)', W / 2, 'center'); g.fillStyle = '#10323D'; y += 30; }
   g.fillRect(P + 80, y, W - 2 * P - 160, 2); y += 36;
-  F(26, true); txt('Recibió: ' + (e.recibio || ''), W / 2, 'center'); y += 50;
+  if (e.recibio) { F(26, true); txt('Recibió: ' + e.recibio, W / 2, 'center'); } y += 50;
   F(20); g.fillStyle = '#5B7680'; txt('Agua Inmaculada Real del Valle · WhatsApp 33 3033 4510', W / 2, 'center'); y += P;
   const out = document.createElement('canvas'); out.width = W; out.height = y; out.getContext('2d').drawImage(tmp, 0, 0);
   return out;
