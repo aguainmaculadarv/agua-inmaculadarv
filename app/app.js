@@ -701,8 +701,9 @@ function mostrarArqueo(main, r) {
   <div class="card" style="max-width:640px;margin:0 auto">
     <h1>Turno cerrado</h1>
     <p class="mut">Hora de salida: <b>${fmtHora(new Date())}</b></p>
-    <div class="alert inf"><b>Último paso:</b> manda tu corte al grupo con el botón verde de abajo.</div>
-    <h3>Arqueo de caja</h3>
+    <div class="alert inf"><b>Último paso:</b> tómale foto con tu celular a este corte y mándala al grupo.</div>
+    <img id="aq-img" alt="Corte de caja" style="display:block;width:100%;max-width:520px;margin:0 auto 14px;border:2px solid var(--line);border-radius:12px">
+    ${dueno ? `    <h3>Arqueo de caja</h3>
     <table><tbody>
       <tr><td>Ventas en efectivo</td><td class="n">${money(r.ventas_efectivo)}</td></tr>
       <tr><td>Ventas por transferencia</td><td class="n">${money(r.ventas_transferencia)}</td></tr>
@@ -712,7 +713,7 @@ function mostrarArqueo(main, r) {
     </tbody></table>
     ${S.perfil.rol === 'dueno'
       ? `<div class="alert ${est(Math.abs(dc) <= tc)}" style="margin-top:10px">Diferencia de caja: ${dc >= 0 ? '+' : ''}${money(dc)} ${dc === 0 ? '· Cuadra exacto' : Math.abs(dc) <= tc ? '· Dentro de la tolerancia' : dc < 0 ? '· Falta dinero' : '· Sobra dinero'}</div>`
-      : dc < 0 ? `<div class="alert bad" style="margin-top:10px">Faltan ${money(-dc)} en caja.</div>` : `<div class="alert ok" style="margin-top:10px">✓ Tu corte está bien.</div>`}
+      : dc < 0 ? `<div class="alert bad" style="margin-top:10px">Faltan ${money(-dc)} en caja.</div>` : `<div class="alert ok" style="margin-top:10px">✓ Tu corte está bien.</div>`}` : ''}
     ${dueno ? `<h3>Agua</h3>
     <table><tbody>
       <tr><td>Litros según medidor</td><td class="n">${r.litros_medidor === null ? '—' : fmtN(r.litros_medidor, 1)}</td></tr>
@@ -720,20 +721,9 @@ function mostrarArqueo(main, r) {
     </tbody></table>
     ${dl === null ? '' : `<div class="alert ${est(Math.abs(dl) <= tl, dl < 0)}" style="margin-top:10px">Diferencia: ${fmtN(dl, 1)} litros (${fmtN(dl / 20, 1)} garrafones) ${Math.abs(dl) <= tl ? '· Cuadra' : dl > 0 ? '· Salió más agua de la vendida' : '· Se vendió más de lo que marca el medidor'}</div>`}
     ${dg === null || dg === undefined ? '' : `<h3>Garrafones nuevos</h3><div class="alert ${est(dg === 0)}">Vendidos: ${fmtN(r.garrafones_nuevos_vendidos)} · Diferencia en conteo: ${dg > 0 ? '+' : ''}${dg} ${dg === 0 ? '· Cuadra' : ''}</div>`}` : ''}
-    <button class="btn big ok" style="margin-top:12px" id="aq-wa">Enviar corte por WhatsApp</button>
-    <button class="btn big ghost" style="margin-top:8px" onclick="S.tab=null;boot()">Listo</button>
+    <button class="btn big" style="margin-top:12px" onclick="S.tab=null;boot()">Listo, ya le tomé foto</button>
   </div>`;
-  document.getElementById('aq-wa').onclick = e => busy(e.currentTarget, async () => {
-    const cv = await canvasCorte(r);
-    const blob = await new Promise(res => cv.toBlob(res, 'image/png'));
-    const nombre = `Corte_${fechaMX()}_${(S.perfil.nombre || 'turno').normalize('NFD').replace(/[^\w]+/g, '_')}.png`;
-    const file = new File([blob], nombre, { type: 'image/png' });
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      try { await navigator.share({ files: [file], title: 'Corte de caja' }); return; } catch (err) { if (err && err.name === 'AbortError') return; }
-    }
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nombre; document.body.appendChild(a); a.click(); a.remove();
-    toast('Imagen del corte descargada. Mándala al grupo por WhatsApp.', 'ok');
-  });
+  canvasCorte(r).then(cv => { const i = document.getElementById('aq-img'); if (i) i.src = cv.toDataURL('image/png'); });
 }
 
 /* =====================================================================
