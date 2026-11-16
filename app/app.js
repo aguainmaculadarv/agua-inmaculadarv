@@ -1479,6 +1479,10 @@ function lineasTicket(v) {
   L.push({ t: sep });
   L.push({ t: dos('TOTAL', money(v.total)), b: true, big: true });
   L.push({ t: dos('Pago:', { efectivo: 'Efectivo', transferencia: 'Transferencia', credito: 'Credito' }[v.forma_pago]) });
+  if (v._paga) {
+    L.push({ t: dos('Pago con:', money(v._paga.paga)) });
+    L.push({ t: dos('Su cambio:', money(Math.max(0, num(v._paga.cambio)))), b: true });
+  }
   if (v.cancelada) L.push({ t: centro('*** VENTA CANCELADA ***'), b: true });
   L.push({ t: sep });
   L.push({ t: centro('Gracias por su compra') });
@@ -1561,6 +1565,8 @@ function enviarImpresora(bytes) {
 async function mostrarTicket(ventaId, recienCobrada) {
   try {
     const v = await datosTicket(ventaId);
+    // Al cobrar en efectivo con "Paga con", el ticket lleva con cuánto pagó y su cambio
+    if (recienCobrada && v.forma_pago === 'efectivo' && S.ultimoCambio && num(S.ultimoCambio.paga) > 0) v._paga = S.ultimoCambio;
     const L = lineasTicket(v);
     const abrir = recienCobrada && v.forma_pago === 'efectivo';
     const logo = await logoRaster().catch(() => null);
