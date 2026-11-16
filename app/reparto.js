@@ -403,7 +403,16 @@ async function vistaPedidos(main) {
   const pend = (ps || []).filter(p => p.estado === 'pendiente');
   const ent = (ps || []).filter(p => p.estado === 'entregado');
   const fila = {}; (ps || []).filter(p => p.estado === 'pendiente').sort((a, b) => new Date(a.creado_en) - new Date(b.creado_en)).forEach((p, k) => fila[p.id] = k + 1);
-  main.innerHTML = `
+  // Pausa de pedidos en línea (botón del dueño)
+  const pausa = String(S.config.pausa_pedidos?.texto || '').trim();
+  const pausado = pausa === 'siempre' || (/^\d{4}-\d{2}-\d{2}$/.test(pausa) && pausa >= hoy);
+  const bannerPausa = !S.config.pausa_pedidos ? '' : S.perfil.rol !== 'dueno'
+    ? (pausado ? '<div class="alert bad">Los pedidos en línea están <b>pausados</b>: los clientes no pueden pedir por la liga.</div>' : '')
+    : pausado
+      ? `<div class="alert bad row" style="align-items:center"><div>Pedidos en línea <b>PAUSADOS</b> ${pausa === 'siempre' ? 'hasta que los reactives' : 'por hoy (mañana se reactivan solos)'}.</div><span class="sp"></span><button class="btn ok" id="pz-on">Reactivar pedidos</button></div>`
+      : `<div class="card row" style="align-items:center;margin-bottom:16px"><div><b>Pedidos en línea activos</b><br><span class="mut small">¿Hoy no hay reparto? Pausa la liga y el cliente verá el aviso.</span></div><span class="sp"></span>
+          <button class="btn sec" id="pz-hoy">Pausar solo hoy</button><button class="btn ghost" id="pz-siempre">Pausar hasta reactivar</button></div>`;
+  main.innerHTML = bannerPausa + `
   <div class="grid g4" style="margin-bottom:16px">
     <div class="kpi"><div class="l">Pendientes</div><div class="v">${pend.length}</div><div class="s">${fmtN(pend.reduce((s, p) => s + num(p.cantidad), 0))} garrafones</div></div>
     <div class="kpi"><div class="l">Entregados hoy</div><div class="v">${ent.length}</div><div class="s">${fmtN(ent.reduce((s, p) => s + num(p.entregado_cantidad), 0))} garrafones</div></div>
@@ -495,6 +504,14 @@ async function vistaPedidos(main) {
     const { error } = await sb.rpc('confirmar_pago_pedido', { p_pedido_id: Number(b.dataset.pagoun), p_deshacer: true }); if (error) throw error;
     toast('Se quitó la confirmación de pago', 'ok'); vistaPedidos(main);
   }));
+  const ponPausa = async (txt, msg) => {
+    const { error } = await sb.from('config').update({ texto: txt }).eq('clave', 'pausa_pedidos'); if (error) throw error;
+    toast(msg, 'ok'); vistaPedidos(main);
+  };
+  const bz = id => document.getElementById(id);
+  if (bz('pz-hoy')) bz('pz-hoy').onclick = e => busy(e.currentTarget, async () => { if (await confirmar('¿Pausar los pedidos en línea <b>solo por hoy</b>? Mañana se reactivan solos.', 'Pausar hoy')) await ponPausa(hoy, 'Pedidos en línea pausados por hoy'); });
+  if (bz('pz-siempre')) bz('pz-siempre').onclick = e => busy(e.currentTarget, async () => { if (await confirmar('¿Pausar los pedidos en línea <b>hasta que los reactives</b>?', 'Pausar')) await ponPausa('siempre', 'Pedidos en línea pausados'); });
+  if (bz('pz-on')) bz('pz-on').onclick = e => busy(e.currentTarget, () => ponPausa('', 'Pedidos en línea reactivados'));
   const bav = document.getElementById('pd-av');
   if (bav) bav.onclick = () => {
     const pend = (ps || []).filter(p => p.estado === 'pendiente').sort((a, b) => fila[a.id] - fila[b.id]);

@@ -156,6 +156,10 @@ async function pintaFila(tel) {
     box.innerHTML = `<h2>Tu pedido #${e.id} va en camino</h2>${e.marcas ? `<p style="font-size:17px"><b>${Object.entries(e.marcas).map(([m, n]) => n + ' ' + m).join(' · ')}</b></p>` : ''}
       <p>${txtFila(e)}</p><p class="mut">${txtTiempo(e)}</p><p class="mut small">Para cambiarlo o cancelarlo, escríbenos por WhatsApp con tu número de pedido.</p>`;
     box.classList.remove('hidden');
+  } else if (e.pausado) {
+    box.innerHTML = `<h2>Hoy no hay servicio a domicilio</h2><p>${esc2(e.aviso_pausa || 'Por ahora no estamos recibiendo pedidos en línea.')}</p>
+      <p class="mut small">Dudas: WhatsApp 33 3033 4510.</p>`;
+    box.classList.remove('hidden'); $('form').classList.add('hidden');
   } else if (e.acepta === false) {
     box.innerHTML = `<h2>Por hoy ya no recibimos pedidos</h2><p>Los pedidos a domicilio se reciben hasta las ${horaTxt(e.corte)} Vuelve a pedir <b>${esc2(e.abre)}</b></p>
       <p class="mut small">¿Es urgente? Escríbenos por WhatsApp al 33 3033 4510.</p>`;
@@ -185,7 +189,7 @@ $('enviar').onclick = async () => {
       if (r.motivo === 'pendiente') { await pintaFila(tel); window.scrollTo(0, 0); return aviso('Ya tienes un pedido en camino (arriba ves cómo va). Si necesitas cambiarlo, escríbenos por WhatsApp.', 'inf'); }
       if (r.motivo === 'saturado') return aviso('En este momento hay muchos pedidos. Intenta en unos minutos o escríbenos por WhatsApp.');
       if (r.motivo === 'telefono') return aviso('Revisa tu teléfono: deben ser 10 dígitos.');
-      if (r.motivo === 'horario') { await pintaFila(tel); window.scrollTo(0, 0); return aviso('Por hoy ya no recibimos pedidos a domicilio. Vuelve a pedir mañana a partir de las 9:00 a.m.'); }
+      if (r.motivo === 'horario') { await pintaFila(tel); window.scrollTo(0, 0); return aviso('Por ahora no estamos recibiendo pedidos a domicilio.'); }
       if (r.motivo === 'alcalina') return aviso('Por ahora no tenemos agua alcalina a domicilio. Pide purificada o escríbenos por WhatsApp.');
       if (r.motivo === 'cantidad') return aviso('Puedes pedir de 1 a 20 garrafones en línea. Para más, escríbenos por WhatsApp.');
       return aviso('Por ahora no podemos recibir pedidos en línea. Escríbenos por WhatsApp.');
