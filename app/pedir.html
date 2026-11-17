@@ -62,6 +62,7 @@ input:focus,textarea:focus{outline:none;border-color:var(--teal)}
       <p class="mut small" style="margin:-4px 0 6px">Elige la marca de <b>tu garrafón</b>.</p>
       <h3 style="margin:8px 0 2px">Agua purificada <span class="mut" id="pp-pu"></span></h3>
       <div id="marcas"></div>
+      <p id="alc-aviso" class="hidden" style="margin:14px 0 0;padding:10px 12px;border-radius:10px;background:#FFF6E5;color:#7A4B00">Por el momento <b>no tenemos servicio de agua alcalina</b>, hasta nuevo aviso.</p>
       <div id="alc-w" class="hidden"><h3 style="margin:16px 0 2px">Agua alcalina <span class="mut" id="pp-al"></span></h3>
       <div id="marcas-alc"></div></div>
       <div class="total"><span id="tq">0 garrafones</span><span id="tt"></span></div>
@@ -138,6 +139,7 @@ sb.rpc('precios_pedido_en_linea').then(({ data, error }) => {
   if (error || !data) return sb.rpc('precio_pedido_en_linea').then(({ data: d }) => { precio = Number(d) || 0; pinta(); });
   precio = Number(data.purificada) || 0; precioAlc = Number(data.alcalina) || 0;
   $('alc-w').classList.toggle('hidden', !precioAlc);
+  $('alc-aviso').classList.toggle('hidden', !!precioAlc);
   if (!precioAlc) ALC.forEach(k => q[k] = 0);
   pinta();
 });
