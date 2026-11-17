@@ -183,7 +183,7 @@ function shell(tabs, contenido) {
   </div>
   ${tabs ? `<div class="tabs">${tabs.map(([k, t]) => `<button class="tab ${S.tab === k ? 'on' : ''}" data-t="${k}">${t}</button>`).join('')}</div>` : ''}
   <main id="main">${contenido || '<div class="empty">Cargando…</div>'}</main>`;
-  $app.querySelectorAll('.tab').forEach(b => b.onclick = () => { S.tab = b.dataset.t; render(); });
+  $app.querySelectorAll('.tab').forEach(b => b.onclick = () => { S.tab = b.dataset.t; S._nav = true; window.scrollTo(0, 0); render(); });
   return document.getElementById('main');
 }
 

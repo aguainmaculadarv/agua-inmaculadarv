@@ -933,5 +933,24 @@ VISTAS_DUENO.reparto = async function (main) {
   main.querySelectorAll('[data-nota]').forEach(b => b.onclick = () => busy(b, () => mostrarNotaEntrega(Number(b.dataset.nota))));
 };
 
+/* ---------------- conservar la posición al refrescar una vista ----------------
+   Al guardar algo, la vista se vuelve a dibujar; si no es un cambio de pestaña,
+   se regresa a la misma altura de la página en lugar de saltar hasta arriba. */
+function conservarScroll(fn) {
+  return async function (main, ...resto) {
+    const nav = S._nav; S._nav = false;
+    const y = nav ? 0 : window.scrollY;
+    if (!nav && main && main.style) main.style.minHeight = main.offsetHeight + 'px';
+    try { return await fn.call(this, main, ...resto); }
+    finally {
+      if (main && main.style) main.style.minHeight = '';
+      if (!nav && y) requestAnimationFrame(() => window.scrollTo(0, y));
+    }
+  };
+}
+for (const V of [VISTAS_DUENO, VISTAS_PLANTA, VISTAS_REPARTO])
+  for (const k of Object.keys(V)) if (typeof V[k] === 'function') V[k] = conservarScroll(V[k]);
+vistaPedidos = conservarScroll(vistaPedidos);
+
 /* ---------------- inicio ---------------- */
 boot();
