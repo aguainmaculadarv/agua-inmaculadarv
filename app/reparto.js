@@ -7,7 +7,8 @@
 function padFirma(id) {
   return `<div class="field"><label>Firma de recibido</label>
     <canvas id="${id}" style="width:100%;height:170px;border:2px dashed var(--line);border-radius:12px;background:#fff;touch-action:none;display:block"></canvas>
-    <div class="row" style="margin-top:6px"><span class="mut small">Que firme con el dedo dentro del recuadro.</span><span class="sp"></span><button type="button" class="btn sm ghost" data-borrar="${id}">Borrar firma</button></div></div>`;
+    <div class="row" style="margin-top:6px"><button type="button" class="btn sm" data-grande="${id}">Firmar en pantalla completa</button><span class="sp"></span><button type="button" class="btn sm ghost" data-borrar="${id}">Borrar firma</button></div>
+    <span class="mut small">Puede firmar aquí con el dedo o en pantalla completa.</span></div>`;
 }
 function activarFirma(id) {
   const c = document.getElementById(id);
@@ -20,6 +21,39 @@ function activarFirma(id) {
   c.onpointermove = e => { if (!dib) return; const p = pos(e); g.beginPath(); g.moveTo(...last); g.lineTo(...p); g.stroke(); last = p; vacio = false; };
   c.onpointerup = c.onpointercancel = () => { dib = false; };
   document.querySelector(`[data-borrar="${id}"]`).onclick = () => { g.clearRect(0, 0, c.width, c.height); vacio = true; };
+  // Firma en pantalla completa: se dibuja en grande y al terminar se pasa al recuadro
+  const bg = document.querySelector(`[data-grande="${id}"]`);
+  if (bg) bg.onclick = () => {
+    const ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:9999;background:#fff;display:flex;flex-direction:column;touch-action:none';
+    ov.innerHTML = `<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid #dde6e9">
+        <b style="font-size:17px">Firme aquí con el dedo</b><span style="flex:1"></span>
+        <button type="button" class="btn ghost" data-x>Cancelar</button><button type="button" class="btn sec" data-b>Borrar</button><button type="button" class="btn ok" data-ok>Listo</button></div>
+      <div style="flex:1;position:relative"><canvas style="position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none"></canvas>
+        <div style="position:absolute;left:8%;right:8%;bottom:22%;border-bottom:2px solid #C9D6DA;pointer-events:none"></div>
+        <div style="position:absolute;left:8%;bottom:calc(22% - 26px);color:#8aa0a8;font-size:14px;pointer-events:none">Firma · Gire el celular para tener más espacio</div></div>`;
+    document.body.appendChild(ov);
+    const bc = ov.querySelector('canvas'), bk = window.devicePixelRatio || 1; let bgx, bvac = true, bd = false, bl = null, caja = null;
+    const prep = () => { const rr = bc.getBoundingClientRect(); bc.width = rr.width * bk; bc.height = rr.height * bk; bgx = bc.getContext('2d'); bgx.scale(bk, bk); bgx.lineWidth = 3.5; bgx.lineCap = 'round'; bgx.lineJoin = 'round'; bgx.strokeStyle = '#10323D'; bvac = true; caja = null; };
+    const marca = ([x, y]) => { caja = caja ? [Math.min(caja[0], x), Math.min(caja[1], y), Math.max(caja[2], x), Math.max(caja[3], y)] : [x, y, x, y]; };
+    prep();
+    const onRes = () => { if (bvac) prep(); }; window.addEventListener('resize', onRes);
+    const bp = e => { const b = bc.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; };
+    bc.onpointerdown = e => { bd = true; bl = bp(e); marca(bl); bc.setPointerCapture(e.pointerId); };
+    bc.onpointermove = e => { if (!bd) return; const q = bp(e); bgx.beginPath(); bgx.moveTo(...bl); bgx.lineTo(...q); bgx.stroke(); bl = q; marca(q); bvac = false; };
+    bc.onpointerup = bc.onpointercancel = () => { bd = false; };
+    const cerrar = () => { window.removeEventListener('resize', onRes); ov.remove(); };
+    ov.querySelector('[data-x]').onclick = cerrar;
+    ov.querySelector('[data-b]').onclick = () => { bgx.clearRect(0, 0, bc.width, bc.height); bvac = true; caja = null; };
+    ov.querySelector('[data-ok]').onclick = () => {
+      if (bvac) return toast('Falta la firma', 'bad');
+      // pasar solo el trazo al recuadro, centrado y lo más grande posible
+      const pad = 12, x0 = Math.max(0, caja[0] - pad), y0 = Math.max(0, caja[1] - pad), sw = caja[2] - caja[0] + pad * 2, sh = caja[3] - caja[1] + pad * 2;
+      const W = c.width / k, H = c.height / k, f = Math.min(W / sw, H / sh, 1.6);
+      g.clearRect(0, 0, W, H); g.drawImage(bc, x0 * bk, y0 * bk, sw * bk, sh * bk, (W - sw * f) / 2, (H - sh * f) / 2, sw * f, sh * f);
+      vacio = false; cerrar();
+    };
+  };
   return {
     vacia: () => vacio,
     async subir(carpeta) {
