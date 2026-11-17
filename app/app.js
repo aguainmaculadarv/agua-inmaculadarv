@@ -171,7 +171,7 @@ async function salir() { await sb.auth.signOut(); S.turno = null; S.tab = null; 
 const TABS_PLANTA = [['vender','Vender'],['pedidos','Pedidos'],['prestamos','Préstamos'],['pipa','Pipa'],['compra','Compras y caja'],['bitacora','Bitácora'],['cerrar','Cerrar turno']];
 const TABS_DUENO = [['resumen','Resumen'],['pedidosD','Pedidos'],['reparto','Reparto'],['prestamosD','Préstamos'],['turnos','Turnos'],['ventas','Ventas'],['cobrar','Por cobrar'],['inventario','Inventario'],['productos','Productos'],
   ['clientes','Clientes'],['contador','Contador'],['fijos','Gastos fijos'],['mant','Mantenimiento'],['bitacoraD','Bitácora'],
-  ['usuarios','Usuarios'],['ajustes','Ajustes'],['planta','Operar planta']];
+  ['usuarios','Usuarios'],['ajustes','Ajustes'],['planta','Operar planta'],['repartir','Repartir']];
 
 function shell(tabs, contenido) {
   const rolTxt = {dueno: 'Dueño', ventanilla: 'Ventanilla', repartidor: 'Repartidor'}[S.perfil.rol];
@@ -189,6 +189,9 @@ function shell(tabs, contenido) {
 
 async function render() {
   try {
+    // El dueño puede salir a repartir con su propio turno (camioneta o moto)
+    if (S.modo === 'dueno' && S.tab === 'repartir') { S.modo = 'repartidor'; S.tab = null; }
+    if (S.modo === 'repartidor' && S.perfil.rol === 'dueno' && S.tab === '_panel') { S.modo = 'dueno'; S.tab = 'resumen'; }
     if (S.modo === 'repartidor') return renderReparto();
     if (S.modo === 'planta' || (S.modo === 'dueno' && S.tab === 'planta') || S.tab?.startsWith('p_')) return renderPlanta();
     const main = shell(TABS_DUENO);

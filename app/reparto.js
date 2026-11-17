@@ -91,12 +91,13 @@ async function pintarAvisos() {
    ===================================================================== */
 async function renderReparto() {
   await cargarTurno();
-  if (!S.turno) return vistaAbrirReparto(shell(null));
+  const panel = S.perfil.rol === 'dueno' ? [['_panel', '← Volver al panel']] : null;
+  if (!S.turno) return vistaAbrirReparto(shell(panel));
   const t = S.turno.tipo;
-  const tabs = t === 'camioneta'
+  const tabs = (t === 'camioneta'
     ? [['r_entregar', 'Entregar'], ['r_recargar', 'Cargar más'], ['r_cerrar', 'Cerrar turno']]
-    : [['r_pedidos', 'Pedidos'], ['r_cerrar', 'Cerrar turno']];
-  if (!tabs.some(x => x[0] === S.tab)) S.tab = tabs[0][0];
+    : [['r_pedidos', 'Pedidos'], ['r_cerrar', 'Cerrar turno']]).concat(panel || []);
+  if (!tabs.some(x => x[0] === S.tab) || S.tab === '_panel') S.tab = tabs[0][0];
   const main = shell(tabs);
   if (t === 'moto') escucharPedidos();
   return VISTAS_REPARTO[S.tab](main);
