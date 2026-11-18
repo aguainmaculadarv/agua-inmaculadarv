@@ -13,8 +13,6 @@ on:
         description: 'Archivo dentro de sql/ a volver a aplicar (ej. 17_corregir_entrega.sql)'
         required: true
 
-concurrency: sql-produccion
-
 jobs:
   aplicar:
     runs-on: ubuntu-latest
