@@ -479,7 +479,7 @@ async function vistaPedidos(main) {
       ${(ps || []).map(p => `<tr><td><span class="mut small">#${p.id}${fila[p.id] ? ` · <b>${fila[p.id]}º en la fila</b>` : ''}</span><br><b>${esc(p.nombre)}</b><br><span class="mut small">${esc(p.domicilio)}</span></td>
         <td>${esc(txtMarcas(p))}<br><span class="mut small">${fmtHora(p.creado_en)} · ${esc(p.forma_pago)}${p.origen === 'cliente' ? ' · <b>pidió en línea</b>' : ''}</span>${p.notas ? `<br><span class="mut small">${esc(p.notas)}</span>` : ''}</td>
         <td>${tag(p.estado)}${p.estado === 'entregado' ? `<br><span class="mut small">${fmtHora(p.entregado_en)} · ${money(p.monto_cobrado)} ${esc(p.forma_pago_real)}</span>` : ''}</td>
-        <td>${p.revisar ? `<span class="tag bad">Revisar</span><br><button class="btn sm" data-rev="${p.id}" style="margin:4px 0">${p.cliente_id ? 'Revisado' : 'Guardar cliente'}</button><br>` : ''}${p.estado === 'pendiente' && p.forma_pago === 'transferencia' ? (p.pago_confirmado_en ? `<span class="tag ok">✓ Pagado ${fmtHora(p.pago_confirmado_en)}</span><br><button class="btn sm ghost" data-pagoun="${p.id}" style="margin:4px 0">Deshacer</button><br>` : `<button class="btn sm ok" data-pago="${p.id}" style="margin:4px 0">Pago recibido</button><br>`) : ''}${p.estado === 'pendiente' ? `<button class="btn sm ghost" data-can="${p.id}">Cancelar</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Sin pedidos hoy</td></tr>'}
+        <td>${p.revisar ? `<span class="tag bad">Revisar</span><br><button class="btn sm" data-rev="${p.id}" style="margin:4px 0">${p.cliente_id ? 'Revisado' : 'Guardar cliente'}</button><br>` : ''}${p.estado === 'pendiente' && p.forma_pago === 'transferencia' ? (p.pago_confirmado_en ? `<span class="tag ok">✓ Pagado ${fmtHora(p.pago_confirmado_en)}</span><br><button class="btn sm ghost" data-pagoun="${p.id}" style="margin:4px 0">Deshacer</button><br>` : `<button class="btn sm ok" data-pago="${p.id}" style="margin:4px 0">Pago recibido</button><br>`) : ''}${p.estado !== 'cancelado' ? `<button class="btn sm sec" data-edp="${p.id}" style="margin:0 4px 4px 0">Editar</button>` : ''}${p.estado === 'pendiente' ? `<button class="btn sm ghost" data-can="${p.id}">Cancelar</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Sin pedidos hoy</td></tr>'}
     </tbody></table></div>
     <div class="alert inf" style="margin-top:12px">Liga para que tus clientes pidan solos:<br><b id="pd-liga">${esc(new URL('pedir.html', location.href).href)}</b>
       <div class="row" style="margin-top:8px"><button class="btn sm" id="pd-copiar">Copiar liga</button></div></div></div>
@@ -539,6 +539,44 @@ async function vistaPedidos(main) {
     const { error } = await sb.rpc('confirmar_pago_pedido', { p_pedido_id: Number(b.dataset.pagoun), p_deshacer: true }); if (error) throw error;
     toast('Se quitó la confirmación de pago', 'ok'); vistaPedidos(main);
   }));
+  // Editar pedido: pendiente → garrafones por marca; entregado → cuántos se entregaron y cómo pagó
+  main.querySelectorAll('[data-edp]').forEach(b => b.onclick = () => {
+    const p = (ps || []).find(x => x.id == b.dataset.edp); if (!p) return;
+    const pend = p.estado === 'pendiente';
+    const alcP = S.productos.find(x => x.nombre === 'Agua alcalina' && x.activo !== false);
+    const KEYS = [...MARCAS, ...(alcP || Object.keys(p.marcas || {}).some(k => k.endsWith(' alcalina')) ? MARCAS.map(m => m + ' alcalina') : [])];
+    const q = Object.fromEntries(KEYS.map(k => [k, num((p.marcas || {})[k])]));
+    if (pend && !p.marcas) q[MARCAS[0]] = num(p.cantidad);
+    let fp = pend ? p.forma_pago : (p.forma_pago_real || p.forma_pago);
+    const idk = k => 'ed-' + k.replace(/\s+/g, '_');
+    modal(`<h2>Editar pedido #${p.id}</h2><p class="mut">${esc(p.nombre)} · ${esc(p.domicilio || '')}</p>
+      ${pend ? `<div>${KEYS.map(k => `<div class="cart-line"><span class="n">${esc(k)}</span><button class="qb" data-em="${k}">−</button><b id="${idk(k)}" style="min-width:28px;text-align:center">${q[k]}</b><button class="qb" data-ep="${k}">+</button></div>`).join('')}</div>`
+        : `<div class="field"><label>Garrafones entregados (pidió ${p.cantidad})</label><input type="number" id="ed-q" inputmode="numeric" value="${num(p.entregado_cantidad)}"></div>
+           <p>Total cobrado: <b id="ed-t">${money(p.monto_cobrado)}</b></p>`}
+      <div class="field"><label>${pend ? 'Paga con' : 'Cómo pagó'}</label><div class="pay" id="ed-fp">${['efectivo', 'transferencia'].map(f => `<button data-fp="${f}" class="${f === fp ? 'on' : ''}">${f === 'efectivo' ? 'Efectivo' : 'Transferencia'}</button>`).join('')}</div></div>
+      <div class="field"><label>Motivo (opcional)</label><input type="text" id="ed-m" placeholder="ej. al final le dejamos 4"></div>
+      ${!pend ? '<p class="mut small">Si el turno de Javier ya cerró, su corte de ese día no se recalcula.</p>' : ''}
+      <div class="row"><button class="btn ghost" data-close>Cancelar</button><span class="sp"></span><button class="btn ok" id="ed-ok">Guardar cambios</button></div>`, (box, close) => {
+      box.querySelectorAll('#ed-fp [data-fp]').forEach(x => x.onclick = () => { fp = x.dataset.fp; box.querySelectorAll('#ed-fp [data-fp]').forEach(y => y.classList.toggle('on', y === x)); });
+      box.querySelectorAll('[data-ep]').forEach(x => x.onclick = () => { const k = x.dataset.ep; if (q[k] < 20) q[k]++; box.querySelector('#' + idk(k)).textContent = q[k]; });
+      box.querySelectorAll('[data-em]').forEach(x => x.onclick = () => { const k = x.dataset.em; if (q[k] > 0) q[k]--; box.querySelector('#' + idk(k)).textContent = q[k]; });
+      const iq = box.querySelector('#ed-q');
+      if (iq) iq.oninput = () => { box.querySelector('#ed-t').textContent = money(totalPedido(p, num(iq.value))); };
+      box.querySelector('#ed-ok').onclick = ev => busy(ev.currentTarget, async () => {
+        const args = { p_pedido_id: p.id, p_forma_pago: fp, p_motivo: box.querySelector('#ed-m').value || null };
+        if (pend) {
+          const marcas = Object.fromEntries(KEYS.filter(k => q[k] > 0).map(k => [k, q[k]]));
+          if (!Object.keys(marcas).length) throw new Error('Deja al menos 1 garrafón, o mejor cancela el pedido');
+          args.p_marcas = marcas;
+        } else {
+          const n = Number(iq.value); if (!(n >= 0)) throw new Error('Escribe cuántos se entregaron');
+          args.p_entregados = n;
+        }
+        const { error } = await sb.rpc('editar_pedido', args); if (error) throw error;
+        close(); toast('Pedido actualizado', 'ok'); vistaPedidos(main);
+      });
+    });
+  });
   const ponPausa = async (txt, msg) => {
     const { error } = await sb.from('config').update({ texto: txt }).eq('clave', 'pausa_pedidos'); if (error) throw error;
     toast(msg, 'ok'); vistaPedidos(main);
