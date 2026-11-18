@@ -780,7 +780,7 @@ const VISTAS_DUENO = {
       domicilioPeriodo(),
       fetchAll(() => sb.from('entregas').select('id,llenos,nuevos,ventas(total,forma_pago,cancelada)')
         .gte('fecha', inicioMX(S.periodo.desde)).lt('fecha', inicioMX(addDays(S.periodo.hasta, 1))).order('id')).catch(() => []),
-      fetchAll(() => sb.from('ventas').select('id,usuario_id,total,forma_pago').eq('cancelada', false)
+      fetchAll(() => sb.from('ventas').select('id,usuario_id,total,forma_pago,canal').eq('cancelada', false)
         .gte('fecha', inicioMX(S.periodo.desde)).lt('fecha', inicioMX(addDays(S.periodo.hasta, 1))).order('id')).catch(() => [])
     ]);
     if (error) throw error;
@@ -792,12 +792,19 @@ const VISTAS_DUENO = {
     const porPer = {};
     (vPer || []).forEach(v => { const k = v.usuario_id || 'x'; const o = porPer[k] = porPer[k] || { efectivo: 0, transferencia: 0, credito: 0 }; if (o[v.forma_pago] !== undefined) o[v.forma_pago] += num(v.total); });
     const reps = S.perfiles.filter(p => p.rol === 'repartidor');
-    if (dom.total) { const k = reps.length === 1 ? reps[0].id : 'dom'; const o = porPer[k] = porPer[k] || { efectivo: 0, transferencia: 0, credito: 0 }; o.efectivo += dom.efectivo; o.transferencia += dom.transferencia; }
     const orden = k => ({ ventanilla: 0, dueno: 1, repartidor: 2 }[S.perfiles.find(p => p.id === k)?.rol] ?? 3);
     const cuadros = Object.entries(porPer).sort((a, b) => orden(a[0]) - orden(b[0])).map(([k, o]) => {
       const nomP = k === 'dom' ? 'Domicilio' : S.perfiles.find(p => p.id === k)?.nombre || 'Sin usuario';
       return `<div class="kpi"><div class="l">${esc(nomP)}</div><div class="v" style="font-size:20px">${money0(o.efectivo)} / ${money0(o.transferencia)}</div>
         <div class="s">Efectivo / Transferencia${o.credito ? ` · Crédito ${money0(o.credito)}` : ''}</div></div>`; }).join('');
+    // Comparativa: lo que Javier cobró a domicilio contra lo que pagó en planta
+    const pag = { efectivo: 0, transferencia: 0 };
+    (vPer || []).filter(v => v.canal === 'repartidor').forEach(v => { if (pag[v.forma_pago] !== undefined) pag[v.forma_pago] += num(v.total); });
+    const filaC = (t, a, b) => { const d = b - a; return `<tr><td><b>${t}</b></td><td class="n">${money0(a)}</td><td class="n">${money0(b)}</td><td class="n" style="color:${Math.abs(d) < 1 ? 'var(--ok)' : d < 0 ? 'var(--bad)' : 'inherit'}"><b>${Math.abs(d) < 1 ? '✓ Cuadra' : (d > 0 ? '+' : '') + money0(d)}</b></td></tr>`; };
+    const tablaComp = `<div class="card" style="margin-bottom:16px"><h2>Domicilio: Javier cobró vs pagó en planta</h2><div class="tw"><table>
+      <thead><tr><th></th><th class="n">Javier cobró</th><th class="n">Pagó en planta</th><th class="n">Diferencia</th></tr></thead><tbody>
+      ${filaC('Efectivo', dom.efectivo, pag.efectivo)}${filaC('Transferencias', dom.transferencia, pag.transferencia)}${filaC('Total', dom.total, pag.efectivo + pag.transferencia)}
+      </tbody></table></div><p class="mut small">"Javier cobró" sale de los pedidos que marcó como entregados (${fmtN(dom.n)}). "Pagó en planta" son las ventas de ventanilla al cliente Javier (reparto). Diferencia en rojo = falta que pague.</p></div>`;
     const tablaJavier = `<div class="card" style="margin-bottom:16px"><h2>Reparto de Javier</h2><div class="tw"><table>
       <thead><tr><th></th><th class="n">Efectivo</th><th class="n">Transferencia</th><th class="n">Crédito</th><th class="n">Total</th><th class="n">Garrafones</th></tr></thead><tbody>
       <tr><td><b>Empresas</b><br><span class="mut small">${fmtN(emp.n)} entregas</span></td><td class="n">${money0(emp.efectivo)}</td><td class="n">${money0(emp.transferencia)}</td><td class="n">${money0(emp.credito)}</td><td class="n"><b>${money0(empTot)}</b></td><td class="n">${fmtN(emp.garr)}</td></tr>
@@ -806,11 +813,12 @@ const VISTAS_DUENO = {
       </tbody></table></div><p class="mut small">Crédito de empresas = lo que quedó por cobrar de esas entregas. Lo que las empresas recogen en planta no entra aquí.</p></div>`;
     const dias = diasPeriodo();
     const relleno = S.productos.find(p => p.nombre === 'Relleno garrafón');
-    const ventasTot = num(r.total) + dom.total, garrTot = num(r.garrafones) + dom.garrafones;
+    // Desde el 17-nov Javier paga en planta lo de domicilio: ya está dentro de las ventas (no se suma aparte)
+    const ventasTot = num(r.total), garrTot = num(r.garrafones);
     const meta = (cfg('meta_diaria_garrafones') || 83) * dias;
     // costo de lo vendido
     const costoVend = r.por_producto.reduce((s, x) => { const p = S.productos.find(pp => pp.nombre === x.producto); return s + (p ? costoProducto(p) * num(x.cantidad) : 0); }, 0)
-      + (relleno ? costoProducto(relleno) * dom.garrafones : 0);
+      ;
     const gastosOp = r.gastos.filter(g => !['insumo', 'garrafon', 'hielo'].includes(g.categoria)).reduce((s, g) => s + num(g.monto), 0);
     const fijosMes = (fijos || []).reduce((s, f) => s + num(f.monto_mensual), 0);
     const fijosPer = fijosMes * dias / 30.4;
@@ -824,21 +832,21 @@ const VISTAS_DUENO = {
       .forEach(t => alertas.push(['bad', `Turno de <b>${esc(t.usuario)}</b> (${fmtFecha(t.abierto_en)}): caja ${money(t.diferencia_caja)}, agua ${fmtN(t.diferencia_litros, 0)} L, garrafones ${t.diferencia_garrafones_nuevos ?? 0}`]));
     (abiertos || []).filter(t => (Date.now() - new Date(t.abierto_en)) > 14 * 36e5).forEach(t => alertas.push(['warn', `Hay un turno abierto desde ${fmtFecha(t.abierto_en)} (${esc(S.perfiles.find(p => p.id === t.usuario_id)?.nombre || '')})`]));
     (mants || []).forEach(m => { if (!m.ultima_fecha) return; const prox = addDays(m.ultima_fecha, m.cada_dias); if (prox <= fechaMX()) alertas.push(['warn', `Mantenimiento vencido: <b>${esc(m.actividad)}</b> (tocaba ${prox})`]); });
-    const litrosPipa = num(r.pipas.litros), litrosCons = num(r.litros_consumo) + num(relleno?.litros_consumo) * dom.garrafones;
+    const litrosPipa = num(r.pipas.litros), litrosCons = num(r.litros_consumo);
     document.getElementById('rs').outerHTML = `
     ${alertas.length ? `<div class="card"><h2>Alertas</h2>${alertas.map(([t, m]) => `<div class="alert ${t}">${m}</div>`).join('')}</div>` : '<div class="alert ok">Sin alertas en este periodo.</div>'}
     <div class="grid g4" style="margin-bottom:16px">
-      <div class="kpi"><div class="l">Ventas (todo)</div><div class="v">${money0(ventasTot)}</div><div class="s">Planta y empresas ${money0(r.total)} · Domicilio ${money0(dom.total)}</div></div>
-      <div class="kpi"><div class="l">Garrafones</div><div class="v">${fmtN(garrTot)}</div><div class="s">Meta ${fmtN(meta)} · ${pct(garrTot / meta)} · ${fmtN(dom.garrafones)} a domicilio</div><div class="bar"><i style="width:${Math.min(100, garrTot / meta * 100)}%"></i></div></div>
-      <div class="kpi"><div class="l">Efectivo / Transferencia</div><div class="v" style="font-size:20px">${money0(num(r.efectivo) + dom.efectivo)} / ${money0(num(r.transferencia) + dom.transferencia)}</div><div class="s">A crédito: ${money0(r.credito)}</div></div>
+      <div class="kpi"><div class="l">Ventas</div><div class="v">${money0(ventasTot)}</div><div class="s">${fmtN(r.num_ventas)} tickets · incluye lo que Javier pagó en planta</div></div>
+      <div class="kpi"><div class="l">Garrafones</div><div class="v">${fmtN(garrTot)}</div><div class="s">Meta ${fmtN(meta)} · ${pct(garrTot / meta)}</div><div class="bar"><i style="width:${Math.min(100, garrTot / meta * 100)}%"></i></div></div>
+      <div class="kpi"><div class="l">Efectivo / Transferencia</div><div class="v" style="font-size:20px">${money0(r.efectivo)} / ${money0(r.transferencia)}</div><div class="s">A crédito: ${money0(r.credito)}</div></div>
       <div class="kpi"><div class="l">Utilidad estimada</div><div class="v" style="color:${utilidad >= 0 ? 'var(--ok)' : 'var(--bad)'}">${money0(utilidad)}</div><div class="s">Margen ${pct(margen)}</div></div>
     </div>
     ${cuadros ? `<h3 style="margin:4px 0 8px">Por persona</h3><div class="grid g4" style="margin-bottom:16px">${cuadros}</div>` : ''}
+    ${tablaComp}
     ${tablaJavier}
     <div class="grid g2">
       <div class="card"><h2>Cómo sale la utilidad</h2><table><tbody>
-        <tr><td>Ventas planta y empresas</td><td class="n">${money(r.total)}</td></tr>
-        <tr><td>Ventas a domicilio (${fmtN(dom.n)} pedidos)</td><td class="n">${money(dom.total)}</td></tr>
+        <tr><td>Ventas</td><td class="n">${money(r.total)}</td></tr>
         <tr><td>Costo de lo vendido (agua + insumos)</td><td class="n">-${money(costoVend)}</td></tr>
         <tr><td>Gastos de operación (limpieza, mantenimiento, otros)</td><td class="n">-${money(gastosOp)}</td></tr>
         <tr><td>Gastos fijos proporcionales (${dias} días de ${money0(fijosMes)}/mes)</td><td class="n">-${money(fijosPer)}</td></tr>
@@ -846,7 +854,7 @@ const VISTAS_DUENO = {
         <p class="mut small">Las compras de insumos no se restan aquí porque entran al inventario; se restan cuando se venden.</p></div>
       <div class="card"><h2>Agua: pipas contra ventas</h2><table><tbody>
         <tr><td>Litros comprados en pipas (${fmtN(r.pipas.num)})</td><td class="n">${fmtN(litrosPipa)}</td></tr>
-        <tr><td>Litros usados según ventas y domicilio (incluye rechazo)</td><td class="n">${fmtN(litrosCons)}</td></tr>
+        <tr><td>Litros usados según ventas (incluye rechazo)</td><td class="n">${fmtN(litrosCons)}</td></tr>
         <tr><td><b>Diferencia</b></td><td class="n"><b>${fmtN(litrosPipa - litrosCons)}</b></td></tr>
         <tr><td>Equivale a garrafones sin vender</td><td class="n">${fmtN((litrosPipa - litrosCons) / 22)}</td></tr></tbody></table>
         <p class="mut small">Una diferencia grande y constante indica fugas, desperdicio o ventas sin registrar. Compara periodos de varias semanas: el agua de una pipa se usa a lo largo de varios días.</p></div>
@@ -977,10 +985,10 @@ const VISTAS_DUENO = {
     const vivas = data.filter(v => !v.cancelada), tf = f => vivas.filter(v => v.forma_pago === f).reduce((x, v) => x + num(v.total), 0);
     const totPE = vivas.reduce((x, v) => x + num(v.total), 0);
     main.innerHTML = per.html + `<div class="grid g4" style="margin-bottom:16px">
-      <div class="kpi"><div class="l">Total del periodo</div><div class="v">${money0(totPE + dom.total)}</div><div class="s">Planta, empresas y domicilio</div></div>
+      <div class="kpi"><div class="l">Total del periodo</div><div class="v">${money0(totPE)}</div><div class="s">Incluye lo que Javier pagó en planta</div></div>
       <div class="kpi"><div class="l">Planta y empresas</div><div class="v">${money0(totPE)}</div><div class="s">${fmtN(vivas.length)} ventas · crédito ${money0(tf('credito'))}</div></div>
-      <div class="kpi"><div class="l">Domicilio</div><div class="v">${money0(dom.total)}</div><div class="s">${fmtN(dom.n)} pedidos · ${fmtN(dom.garrafones)} garrafones</div></div>
-      <div class="kpi"><div class="l">Efectivo / Transferencia</div><div class="v" style="font-size:20px">${money0(tf('efectivo') + dom.efectivo)} / ${money0(tf('transferencia') + dom.transferencia)}</div><div class="s">Incluye domicilio</div></div></div>
+      <div class="kpi"><div class="l">Domicilio (cobró Javier)</div><div class="v">${money0(dom.total)}</div><div class="s">${fmtN(dom.n)} pedidos · ya va dentro del total al pagarlo en planta</div></div>
+      <div class="kpi"><div class="l">Efectivo / Transferencia</div><div class="v" style="font-size:20px">${money0(tf('efectivo'))} / ${money0(tf('transferencia'))}</div><div class="s">Cobrado en planta y empresas</div></div></div>
     <div class="card"><div class="row"><h2 style="margin:0">Ventas</h2><span class="sp"></span><span class="tag inf">${data.filter(v => !v.cancelada).length} ventas · ${money(data.filter(v => !v.cancelada).reduce((s, v) => s + num(v.total), 0))}</span></div>
       <div class="tw"><table><thead><tr><th>Fecha</th><th>Vendió</th><th>Productos</th><th>Cliente</th><th>Pago</th><th class="n">Total</th><th></th></tr></thead><tbody>
       ${data.map(v => `<tr><td>${fmtFecha(v.fecha)}</td><td>${nom(v.usuario_id)}</td><td>${v.venta_detalle.map(d => `${fmtN(d.cantidad)} ${esc(prod(d.producto_id))}`).join(', ')}</td><td>${cli(v.cliente_id)}</td>
