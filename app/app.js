@@ -55,6 +55,20 @@ function confirmar(texto, okTxt = 'Sí, continuar', cancelTxt = 'Cancelar') {
       (box, close) => { box.querySelector('#cf-ok').onclick = () => { close(); res(true); }; box.querySelector('[data-close]').addEventListener('click', () => res(false)); });
   });
 }
+/* Tarjeta de lo que Javier debe pagar en planta (la usan ventanilla y Javier, con los mismos números) */
+function cajaJavier(s, f, titulo, btn) {
+  const x = s[f]; const debe = num(x.cobrado) - num(x.pagado);
+  const pur = Math.max(num(x.pur), 0), alc = Math.max(num(x.alc), 0), garr = pur + alc;
+  const pu = garr && !alc ? Math.round(debe / garr) : null;
+  const det = garr ? `${garr} ${garr === 1 ? 'garrafón' : 'garrafones'}${pu ? ` de ${money0(pu)}` : ''}${alc ? ` (${alc} alcalina)` : ''}` : '';
+  return `<div class="card" style="text-align:center">
+    <h2>${titulo}</h2>
+    ${debe >= 1 ? `<div style="font-size:44px;font-weight:800;margin:6px 0">${money0(debe)}</div>
+      <p class="mut">${det}</p>
+      ${btn ? `<button class="btn big" data-cj="${f}" data-m="${debe}">${btn} ${money0(debe)}</button>` : ''}`
+    : `<div style="font-size:28px;font-weight:700;color:var(--ok);margin:10px 0">✓ Al corriente</div>`}
+  </div>`;
+}
 async function busy(btn, fn) {
   const t = btn?.innerHTML; if (btn) { btn.disabled = true; btn.innerHTML = 'Guardando…'; }
   try { return await fn(); }
@@ -559,17 +573,7 @@ const VISTAS_PLANTA = {
   async javier(main) {
     const { data: s, error } = await sb.rpc('saldo_javier');
     if (error) { main.innerHTML = `<div class="card"><p>${esc(errMsg(error))}</p></div>`; return; }
-    const caja = (f, titulo, btn) => {
-      const x = s[f]; const debe = num(x.cobrado) - num(x.pagado);
-      const garr = Math.max(num(x.pur), 0) + Math.max(num(x.alc), 0);
-      return `<div class="card" style="text-align:center">
-        <h2>${titulo}</h2>
-        ${debe >= 1 ? `<div style="font-size:44px;font-weight:800;margin:6px 0">${money0(debe)}</div>
-          <p class="mut">${garr} ${garr === 1 ? 'garrafón' : 'garrafones'}${num(x.alc) > 0 ? ` (${num(x.alc)} alcalina)` : ''}</p>
-          <button class="btn big" data-cj="${f}" data-m="${debe}">${btn} ${money0(debe)}</button>`
-        : `<div style="font-size:28px;font-weight:700;color:var(--ok);margin:10px 0">✓ Al corriente</div>`}
-      </div>`;
-    };
+    const caja = (f, titulo, btn) => cajaJavier(s, f, titulo, btn);
     main.innerHTML = `<div class="card" style="margin-bottom:16px"><h2>Javier · domicilio</h2>
       <p class="mut">Lo que Javier entregó y marcó en la app, menos lo que ya pagó aquí. Cóbrale antes de que cierre su turno.</p></div>
       <div class="grid g2">${caja('efectivo', 'Efectivo que debe entregar', 'Cobrar efectivo')}${caja('transferencia', 'Transferencias', 'Registrar transferencias')}</div>

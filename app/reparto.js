@@ -130,7 +130,7 @@ async function renderReparto() {
   const t = S.turno.tipo;
   const tabs = (t === 'camioneta'
     ? [['r_entregar', 'Entregar'], ['r_recargar', 'Cargar más'], ['r_cerrar', 'Cerrar turno']]
-    : [['r_pedidos', 'Pedidos'], ['r_cerrar', 'Cerrar turno']]).concat(panel || []);
+    : [['r_pedidos', 'Pedidos'], ['r_pagar', 'Pagar en caja'], ['r_cerrar', 'Cerrar turno']]).concat(panel || []);
   if (!tabs.some(x => x[0] === S.tab) || S.tab === '_panel') S.tab = tabs[0][0];
   const main = shell(tabs);
   if (t === 'moto') escucharPedidos();
@@ -352,6 +352,17 @@ const VISTAS_REPARTO = {
       const { error } = await sb.rpc('registrar_carga', { p_turno_id: S.turno.id, p_garrafones: q, p_notas: 'Vuelta' });
       if (error) throw error; toast(`Vuelta registrada. Paga ${money(q * precio)} en ventanilla`, 'ok'); S.tab = 'r_pedidos'; renderReparto();
     });
+  },
+
+  /* ---------- MOTO: cuánto pagar en caja (mismos números que ve ventanilla) ---------- */
+  async r_pagar(main) {
+    const { data: s, error } = await sb.rpc('saldo_javier');
+    if (error) { main.innerHTML = `<div class="card"><p>${esc(errMsg(error))}</p></div>`; return; }
+    main.innerHTML = `<div class="card" style="margin-bottom:16px"><h2>Pagar en caja</h2>
+      <p class="mut">Esto es lo que entregaste y marcaste en la app, menos lo que ya pagaste. En ventanilla les sale lo mismo en la pestaña "Javier". Paga antes de cerrar tu turno.</p></div>
+      <div class="grid g2">${cajaJavier(s, 'efectivo', 'Efectivo que entregas en caja')}${cajaJavier(s, 'transferencia', 'Transferencias')}</div>
+      <div class="row" style="margin-top:12px"><span class="sp"></span><button class="btn ghost" id="pj-r">Actualizar</button></div>`;
+    document.getElementById('pj-r').onclick = () => VISTAS_REPARTO.r_pagar(main);
   },
 
   /* ---------- CERRAR TURNO DE REPARTO ---------- */
