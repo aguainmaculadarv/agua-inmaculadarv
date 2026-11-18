@@ -168,7 +168,7 @@ function renderInactivo() {
 async function salir() { await sb.auth.signOut(); S.turno = null; S.tab = null; location.reload(); }
 
 /* ---------------- estructura general ---------------- */
-const TABS_PLANTA = [['vender','Vender'],['pedidos','Pedidos'],['prestamos','Préstamos'],['pipa','Pipa'],['compra','Compras y caja'],['bitacora','Bitácora'],['cerrar','Cerrar turno']];
+const TABS_PLANTA = [['vender','Vender'],['pedidos','Pedidos'],['javier','Javier'],['prestamos','Préstamos'],['pipa','Pipa'],['compra','Compras y caja'],['bitacora','Bitácora'],['cerrar','Cerrar turno']];
 const TABS_DUENO = [['resumen','Resumen'],['pedidosD','Pedidos'],['reparto','Reparto'],['prestamosD','Préstamos'],['turnos','Turnos'],['ventas','Ventas'],['cobrar','Por cobrar'],['inventario','Inventario'],['productos','Productos'],
   ['clientes','Clientes'],['contador','Contador'],['fijos','Gastos fijos'],['mant','Mantenimiento'],['bitacoraD','Bitácora'],
   ['usuarios','Usuarios'],['ajustes','Ajustes'],['planta','Operar planta'],['repartir','Repartir']];
@@ -552,6 +552,41 @@ const VISTAS_PLANTA = {
       const { error } = await sb.from('bitacora').insert({ tipo: val('b-t'), actividad: val('b-a'), cantidad: nval('b-q'), foto, notas: val('b-n') || null, usuario_id: S.session.user.id });
       if (error) throw error;
       toast('Guardado', 'ok'); VISTAS_PLANTA.bitacora(main);
+    });
+  },
+
+  /* ---------- JAVIER: lo que debe pagar de domicilio ---------- */
+  async javier(main) {
+    const { data: s, error } = await sb.rpc('saldo_javier');
+    if (error) { main.innerHTML = `<div class="card"><p>${esc(errMsg(error))}</p></div>`; return; }
+    const caja = (f, titulo, btn) => {
+      const x = s[f]; const debe = num(x.cobrado) - num(x.pagado);
+      const garr = Math.max(num(x.pur), 0) + Math.max(num(x.alc), 0);
+      return `<div class="card" style="text-align:center">
+        <h2>${titulo}</h2>
+        ${debe >= 1 ? `<div style="font-size:44px;font-weight:800;margin:6px 0">${money0(debe)}</div>
+          <p class="mut">${garr} ${garr === 1 ? 'garrafón' : 'garrafones'}${num(x.alc) > 0 ? ` (${num(x.alc)} alcalina)` : ''}</p>
+          <button class="btn big" data-cj="${f}" data-m="${debe}">${btn} ${money0(debe)}</button>`
+        : `<div style="font-size:28px;font-weight:700;color:var(--ok);margin:10px 0">✓ Al corriente</div>`}
+      </div>`;
+    };
+    main.innerHTML = `<div class="card" style="margin-bottom:16px"><h2>Javier · domicilio</h2>
+      <p class="mut">Lo que Javier entregó y marcó en la app, menos lo que ya pagó aquí. Cóbrale antes de que cierre su turno.</p></div>
+      <div class="grid g2">${caja('efectivo', 'Efectivo que debe entregar', 'Cobrar efectivo')}${caja('transferencia', 'Transferencias', 'Registrar transferencias')}</div>
+      <div class="row" style="margin-top:12px"><span class="sp"></span><button class="btn ghost" id="cj-r">Actualizar</button></div>`;
+    document.getElementById('cj-r').onclick = () => VISTAS_PLANTA.javier(main);
+    main.querySelectorAll('[data-cj]').forEach(b => b.onclick = async () => {
+      const f = b.dataset.cj, m = num(b.dataset.m);
+      const ok = await confirmar(f === 'efectivo' ? `¿Javier te entregó <b>${money0(m)}</b> en efectivo?` : `¿Registrar <b>${money0(m)}</b> de transferencias de Javier?`, 'Sí, registrar');
+      if (!ok) return;
+      await busy(b, async () => {
+        if (!S.turno) throw new Error('Primero abre tu turno de planta');
+        const { data: r, error: e2 } = await sb.rpc('cobrar_a_javier', { p_turno_id: S.turno.id, p_forma: f });
+        if (e2) throw e2;
+        toast('Pago de Javier registrado', 'ok');
+        await VISTAS_PLANTA.javier(main);
+        if (r?.venta_id) await mostrarTicket(r.venta_id, f === 'efectivo');
+      });
     });
   },
 
