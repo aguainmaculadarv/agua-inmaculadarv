@@ -218,3 +218,4 @@ update ventas v set canal = 'repartidor' from clientes c
  where c.id = v.cliente_id and c.tipo = 'distribuidor' and v.canal <> 'repartidor';
 
 select 'Javier paga en planta: listo' as resultado;
+-- (reenviado el 17-nov para aplicarlo; el primer intento se canceló en la fila)
