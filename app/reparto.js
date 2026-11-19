@@ -129,8 +129,8 @@ async function renderReparto() {
   if (!S.turno) return vistaAbrirReparto(shell(panel));
   const t = S.turno.tipo;
   const tabs = (t === 'camioneta'
-    ? [['r_entregar', 'Entregar'], ['r_recargar', 'Cargar más'], ['r_cerrar', 'Cerrar turno']]
-    : [['r_pedidos', 'Pedidos'], ['r_pagar', 'Pagar en caja'], ['r_cerrar', 'Cerrar turno']]).concat(panel || []);
+    ? [['r_entregar', 'Entregar'], ['r_ruta', 'Venta en ruta'], ['r_pagar', 'Pagar en caja'], ['r_recargar', 'Cargar más'], ['r_cerrar', 'Cerrar turno']]
+    : [['r_pedidos', 'Pedidos'], ['r_ruta', 'Venta en ruta'], ['r_pagar', 'Pagar en caja'], ['r_cerrar', 'Cerrar turno']]).concat(panel || []);
   if (!tabs.some(x => x[0] === S.tab) || S.tab === '_panel') S.tab = tabs[0][0];
   const main = shell(tabs);
   if (t === 'moto') escucharPedidos();
@@ -351,6 +351,33 @@ const VISTAS_REPARTO = {
       const q = nval('rv-q'); if (!q || q <= 0) throw new Error('Escribe la cantidad');
       const { error } = await sb.rpc('registrar_carga', { p_turno_id: S.turno.id, p_garrafones: q, p_notas: 'Vuelta' });
       if (error) throw error; toast(`Vuelta registrada. Paga ${money(q * precio)} en ventanilla`, 'ok'); S.tab = 'r_pedidos'; renderReparto();
+    });
+  },
+
+  /* ---------- VENTA EN RUTA: lo que vendió sin pedido + prospección ---------- */
+  async r_ruta(main) {
+    const rel = S.productos.find(p => p.nombre === 'Relleno garrafón');
+    const pu = num(rel?.precio_domicilio) || num(rel?.precio) || 28;
+    const campo = (id, t, ph) => `<div class="field"><label>${t}</label><input type="number" id="${id}" inputmode="numeric" min="0" placeholder="${ph}" style="font-size:22px"></div>`;
+    main.innerHTML = `<div class="card"><h2>Venta en ruta</h2>
+      <p class="mut">Para lo que vendiste sin pedido en la app (en la calle, con clientes nuevos). No necesitas teléfono ni dirección. Puedes registrarlo al final del día o cuando quieras.</p>
+      <div class="grid g2">${campo('vr-e', 'Garrafones cobrados en efectivo', '0')}${campo('vr-t', 'Garrafones por transferencia', '0')}</div>
+      ${campo('vr-v', 'Negocios o casas que visitaste para ofrecer agua', '0')}
+      <div class="field"><label>¿Dónde? (opcional)</label><input type="text" id="vr-l" placeholder="ej. Hospital, Av. Real del Valle"></div>
+      <div class="alert inf" id="vr-tot">A ${money(pu)} por garrafón.</div>
+      <div class="row"><span class="sp"></span><button class="btn big ok" id="vr-b">Guardar</button></div></div>`;
+    const tot = () => { const e = nval('vr-e') || 0, t = nval('vr-t') || 0;
+      document.getElementById('vr-tot').innerHTML = e + t ? `${e + t} garrafones a ${money(pu)}: <b>${money((e + t) * pu)}</b>${e ? ` · efectivo ${money(e * pu)}` : ''}${t ? ` · transferencia ${money(t * pu)}` : ''}` : `A ${money(pu)} por garrafón.`; };
+    ['vr-e', 'vr-t'].forEach(id => document.getElementById(id).oninput = tot);
+    document.getElementById('vr-b').onclick = ev => busy(ev.currentTarget, async () => {
+      const e = nval('vr-e') || 0, t = nval('vr-t') || 0, v = nval('vr-v') || 0;
+      if (e < 0 || t < 0 || v < 0) throw new Error('Las cantidades no pueden ser negativas');
+      if (!(e + t + v)) throw new Error('Escribe al menos una cantidad');
+      if (!(await confirmar(`¿Guardar ${e + t} garrafones (${money((e + t) * pu)})${v ? ` y ${v} visitas` : ''}?`, 'Sí, guardar'))) return;
+      const { error } = await sb.rpc('venta_en_ruta', { p_turno_id: S.turno.id, p_efectivo: e, p_transferencia: t, p_visitas: v, p_lugar: val('vr-l') || null });
+      if (error) throw error;
+      toast(e + t ? 'Guardado. Págalo en caja.' : 'Visitas guardadas', 'ok');
+      if (e + t) { S.tab = 'r_pagar'; renderReparto(); } else VISTAS_REPARTO.r_ruta(main);
     });
   },
 
