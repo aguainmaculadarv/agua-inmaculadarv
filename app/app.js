@@ -1422,11 +1422,11 @@ function editarCliente(c, onSave) {
       ${f('ec-n', 'Nombre comercial', c.nombre)}
       <div class="field"><label>Tipo</label><select id="ec-t">${['restaurante', 'empresa', 'domicilio', 'distribuidor'].map(t => `<option ${t === c.tipo ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
       ${f('ec-tel', 'Teléfono', c.telefono, 'tel')}
-      ${f('ec-pe', 'Precio especial por relleno (autorizado por ti)', c.precio_especial, 'number')}
+      ${f('ec-pe', 'Precio del relleno con entrega de Javier (autorizado por ti)', c.precio_especial, 'number')}
     </div>
     ${f('ec-dom', 'Domicilio', c.domicilio)}${f('ec-map', 'Liga de Google Maps', c.maps_url)}
-    <h3 style="margin-top:8px">Precios especiales</h3>
-    <p class="mut small" style="margin-top:-6px">Déjalo vacío para cobrar el precio normal. Ventanilla y Javier lo aplican solos al elegir este cliente.</p>
+    <h3 style="margin-top:8px">Precios en planta</h3>
+    <p class="mut small" style="margin-top:-6px">Cuando la empresa recoge en ventanilla. Déjalo vacío para cobrar el precio normal. Si Javier le entrega, el relleno va al precio con entrega de arriba.</p>
     <div class="grid g3">${S.productos.filter(p => p.activo !== false).map(p => { const cp = (S.cprecios || []).find(x => x.cliente_id === c.id && x.producto_id === p.id);
       return `<div class="field"><label>${esc(p.nombre)} <span class="mut small">(normal ${money(p.precio)})</span></label><input type="number" inputmode="decimal" class="ec-pp" data-pid="${p.id}" value="${cp ? cp.precio : ''}"></div>`; }).join('')}</div>
     <h3 style="margin-top:8px">Ruta y crédito</h3>

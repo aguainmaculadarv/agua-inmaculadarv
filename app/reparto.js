@@ -861,7 +861,7 @@ async function estadoCuenta(clienteId, mes) {
   if (error) throw error;
   const ids = (en || []).map(e => e.venta_id).filter(Boolean);
   const [{ data: vs }, { data: vp }] = await Promise.all([
-    ids.length ? sb.from('ventas').select('id,total,forma_pago,cancelada').in('id', ids) : Promise.resolve({ data: [] }),
+    ids.length ? sb.from('ventas').select('id,total,forma_pago,cancelada,venta_detalle(cantidad,producto_id,precio_unitario)').in('id', ids) : Promise.resolve({ data: [] }),
     sb.from('ventas').select('id,fecha,total,forma_pago,cancelada,canal,recibio,firma,venta_detalle(cantidad,producto_id)').eq('cliente_id', clienteId).eq('cancelada', false).gte('fecha', ini).lt('fecha', fin).order('fecha')]);
   const venta = id => (vs || []).find(v => v.id === id);
   const paths = (en || []).map(e => e.firma).concat((vp || []).map(v => v.firma)).filter(Boolean);
@@ -917,6 +917,7 @@ async function estadoCuenta(clienteId, mes) {
         <div class="grid g3"><div class="field"><label>Llenos</label><input type="number" id="ce-l" inputmode="numeric" value="${e.llenos}"></div>
           <div class="field"><label>Nuevos</label><input type="number" id="ce-n" inputmode="numeric" value="${num(e.nuevos)}"></div>
           <div class="field"><label>Vacíos</label><input type="number" id="ce-v" inputmode="numeric" value="${e.vacios}"></div></div>
+        <div class="field"><label>Precio por garrafón lleno</label><input type="number" id="ce-pr" inputmode="decimal" value="${(() => { const rel = S.productos.find(p => p.nombre === 'Relleno garrafón'); const d = (v?.venta_detalle || []).find(x => x.producto_id === rel?.id); return num(d?.precio_unitario) || num(c.precio_especial) || num(rel?.precio); })()}"></div>
         <div class="field"><label>Forma de pago</label><div class="pay" id="ce-fp">${['credito', 'efectivo', 'transferencia'].map(f => `<button data-fp="${f}" class="${f === fp ? 'on' : ''}">${f === 'credito' ? 'Crédito' : f === 'efectivo' ? 'Efectivo' : 'Transferencia'}</button>`).join('')}</div></div>
         <div class="field"><label>Motivo de la corrección</label><input type="text" id="ce-m" placeholder="ej. Javier capturó 10 y eran 8"></div>
         <p class="mut small">Se recalcula el cobro y los garrafones prestados. La firma no cambia y queda anotado lo que tenía antes.${v && !v.cancelada && v.forma_pago !== 'credito' ? ' Ojo: era de contado; el corte de ese turno no se recalcula.' : ''}</p>
@@ -926,7 +927,8 @@ async function estadoCuenta(clienteId, mes) {
           const l = nval('ce-l'), n = nval('ce-n'), vv = nval('ce-v');
           if ([l, n, vv].some(x => x === null || x < 0)) throw new Error('Escribe las cantidades (0 si ninguna)');
           if (!val('ce-m')) throw new Error('Escribe el motivo de la corrección');
-          const { error } = await sb.rpc('corregir_entrega', { p_entrega_id: e.id, p_llenos: l, p_nuevos: n, p_vacios: vv, p_forma_pago: fp, p_motivo: val('ce-m') });
+          const pr = nval('ce-pr'); if (pr === null || pr <= 0) throw new Error('Escribe el precio por garrafón');
+          const { error } = await sb.rpc('corregir_entrega', { p_entrega_id: e.id, p_llenos: l, p_nuevos: n, p_vacios: vv, p_forma_pago: fp, p_motivo: val('ce-m'), p_precio: pr });
           if (error) throw error;
           close2(); document.querySelectorAll('.modal').forEach(m => m.remove());
           toast('Entrega corregida', 'ok'); await estadoCuenta(clienteId, mes);
