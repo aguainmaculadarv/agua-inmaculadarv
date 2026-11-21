@@ -1181,8 +1181,9 @@ const VISTAS_DUENO = {
       const v = d.ventas, t = num(d.iva_tasa), dia = fechaMX(new Date(v.fecha));
       porTasa[t] = (porTasa[t] || 0) + num(d.importe);
       const esPG = !v.cliente_id || !v.facturada;
-      if (!v.cliente_id) { pg[dia] = pg[dia] || { dia, t0: 0, t16: 0 }; pg[dia][t ? 't16' : 't0'] += num(d.importe); }
-      if (v.cliente_id) {
+      const sinFac = v.cliente_id && S.clientes.find(x => x.id === v.cliente_id)?.requiere_factura === false;
+      if (!v.cliente_id || sinFac) { pg[dia] = pg[dia] || { dia, t0: 0, t16: 0 }; pg[dia][t ? 't16' : 't0'] += num(d.importe); }
+      if (v.cliente_id && !sinFac) {
         const c = porCli[v.cliente_id] = porCli[v.cliente_id] || { id: v.cliente_id, total: 0, pendiente: 0, credito: 0, folios: new Set(), ventas: new Set() };
         c.total += num(d.importe); if (!v.facturada) { c.pendiente += num(d.importe); c.ventas.add(v.id); } else if (v.folio_factura) c.folios.add(v.folio_factura);
         if (v.forma_pago === 'credito') c.credito += num(d.importe);
@@ -1202,22 +1203,47 @@ const VISTAS_DUENO = {
     <div class="card"><h2>Clientes con datos fiscales</h2><div class="tw"><table><thead><tr><th>Cliente</th><th>RFC</th><th class="n">Total del mes</th><th class="n">A crédito</th><th class="n">Pendiente de facturar</th><th>Folios</th><th></th></tr></thead><tbody>
       ${cliRows.map(c => `<tr><td><b>${esc(c.cli.nombre || '#' + c.id)}</b><br><span class="mut small">${esc(c.cli.razon_social || '')}</span></td><td>${esc(c.cli.rfc || 'Sin RFC')}</td><td class="n">${money(c.total)}</td><td class="n">${money(c.credito)}</td>
         <td class="n">${c.pendiente ? `<span class="tag warn">${money(c.pendiente)}</span>` : '<span class="tag ok">Facturado</span>'}</td><td>${[...c.folios].map(esc).join(', ')}</td>
-        <td class="row" style="flex-wrap:nowrap">${c.cli.rfc ? `<button class="btn sm sec" data-fis="${c.id}">Datos</button>` : ''}${c.pendiente ? `<button class="btn sm" data-fac="${c.id}">Marcar facturado</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">Sin ventas a clientes registrados</td></tr>'}
-      </tbody></table></div></div>
+        <td class="row" style="flex-wrap:nowrap">${c.cli.rfc ? `<button class="btn sm sec" data-fis="${c.id}">Datos</button>` : ''}${c.pendiente ? `<button class="btn sm" data-fac="${c.id}">Marcar facturado</button>` : ''}<button class="btn sm ghost" data-nofac="${c.id}" title="Ya no aparece aquí; sus ventas van a la factura global">No se factura</button></td></tr>`).join('') || '<tr><td colspan="7" class="empty">Sin ventas a clientes registrados</td></tr>'}
+      </tbody></table></div>
+      ${(() => { const nf = S.clientes.filter(x => x.requiere_factura === false); return nf.length ? `<details style="margin-top:10px"><summary class="mut">No se les factura (${nf.length}) · sus ventas van en la factura global</summary>
+        <div class="row" style="flex-wrap:wrap;gap:8px;margin-top:8px">${nf.map(x => `<span class="tag">${esc(x.nombre)} <a href="#" data-sifac="${x.id}" style="margin-left:6px">Volver a facturar</a></span>`).join('')}</div></details>` : ''; })()}</div>
     <div class="card"><h2>Gastos del mes</h2><div class="tw"><table><thead><tr><th>Fecha</th><th>Concepto</th><th>Categoría</th><th>Factura</th><th class="n">Monto</th></tr></thead><tbody>
       ${(gastos || []).map(g => `<tr><td>${fmtFecha(g.fecha)}</td><td>${esc(g.descripcion)}${g.proveedor ? '<br><span class="mut small">' + esc(g.proveedor) + '</span>' : ''}</td><td>${esc(g.categoria)}</td><td>${g.con_factura ? '<span class="tag ok">Sí</span>' : '<span class="tag">No</span>'}</td><td class="n">${money(g.monto)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">Sin gastos</td></tr>'}
       </tbody></table></div></div>`;
     main.querySelectorAll('[data-fis]').forEach(b => b.onclick = () => datosFiscales(S.clientes.find(c => c.id == b.dataset.fis)));
+    const ponFac = async (id, v) => { const { error } = await sb.from('clientes').update({ requiere_factura: v }).eq('id', id); if (error) throw error;
+      const c = S.clientes.find(x => x.id == id); if (c) c.requiere_factura = v; VISTAS_DUENO.contador(main); };
+    main.querySelectorAll('[data-nofac]').forEach(b => b.onclick = async () => {
+      const c = S.clientes.find(x => x.id == b.dataset.nofac);
+      if (await confirmar(`¿A <b>${esc(c?.nombre || '')}</b> no se le factura? Deja de aparecer aquí y sus ventas pasan a la factura global (público en general).`, 'Sí, no se factura')) busy(b, () => ponFac(c.id, false));
+    });
+    main.querySelectorAll('[data-sifac]').forEach(a => a.onclick = ev => { ev.preventDefault(); ponFac(Number(a.dataset.sifac), true).catch(e => toast(errMsg(e), 'bad')); });
     main.querySelectorAll('[data-fac]').forEach(b => b.onclick = () => {
       const c = cliRows.find(x => x.id == b.dataset.fac);
-      modal(`<h2>Marcar como facturado</h2><p>${esc(c.cli.nombre)} · ${money(c.pendiente)} pendientes en ${c.ventas.size} ventas.</p>
+      const vs = [...c.ventas].map(id => { const r = det.filter(d => d.ventas.id === id); return { id, fecha: r[0].ventas.fecha, forma: r[0].ventas.forma_pago, total: r.reduce((x, d) => x + num(d.importe), 0) }; }).sort((a, b) => a.fecha.localeCompare(b.fecha));
+      modal(`<h2>Marcar como facturado</h2><p>${esc(c.cli.nombre)} · ${money(c.pendiente)} pendientes en ${vs.length} notas.</p>
+        <div class="field"><label>Total de la factura (opcional)</label><input type="number" inputmode="decimal" id="mf-t" placeholder="ej. 720"></div>
+        <p class="mut small" style="margin-top:-6px">Si escribes el total, palomeo las notas que suman exacto. Las que no palomees se quedan pendientes.</p>
+        <div class="tw" style="max-height:280px;overflow:auto"><table><tbody>
+          ${vs.map(v => `<tr><td><label class="chk" style="margin:0"><input type="checkbox" data-mv="${v.id}" checked> ${fmtFecha(v.fecha)}</label></td><td class="mut small">Nota #${v.id} · ${esc(v.forma)}</td><td class="n">${money(v.total)}</td></tr>`).join('')}
+        </tbody></table></div>
+        <div class="total"><span>Notas seleccionadas</span><span id="mf-s"></span></div>
         <div class="field"><label>Folio de la factura</label><input type="text" id="mf-f"></div>
         <div class="row"><button class="btn ghost" data-close>Cancelar</button><span class="sp"></span><button class="btn" id="mf-b">Guardar</button></div>`,
-        (box, close) => box.querySelector('#mf-b').onclick = e => busy(e.currentTarget, async () => {
-          if (!val('mf-f')) throw new Error('Escribe el folio');
-          const { error } = await sb.from('ventas').update({ facturada: true, folio_factura: val('mf-f') }).in('id', [...c.ventas]);
-          if (error) throw error; close(); toast('Marcado como facturado', 'ok'); VISTAS_DUENO.contador(main);
-        }));
+        (box, close) => {
+          const marc = () => [...box.querySelectorAll('[data-mv]:checked')].map(i => Number(i.dataset.mv));
+          const pinta = () => { const sm = marc().reduce((x, id) => x + vs.find(v => v.id === id).total, 0), t = nval('mf-t'), d = t ? sm - t : 0;
+            box.querySelector('#mf-s').innerHTML = `${money(sm)}${t ? (Math.abs(d) < 0.5 ? ' ✓' : ` <span style="color:var(--bad)">(${d > 0 ? '+' : ''}${money(d)})</span>`) : ''}`; };
+          box.querySelectorAll('[data-mv]').forEach(i => i.onchange = pinta);
+          box.querySelector('#mf-t').oninput = () => { const t = nval('mf-t'); if (t) { const sel = new Set(notasQueSuman(vs.map(v => ({ id: v.id, total: v.total })), t) || []); if (sel.size) box.querySelectorAll('[data-mv]').forEach(i => i.checked = sel.has(Number(i.dataset.mv))); } pinta(); };
+          pinta();
+          box.querySelector('#mf-b').onclick = e => busy(e.currentTarget, async () => {
+            if (!val('mf-f')) throw new Error('Escribe el folio');
+            const ids = marc(); if (!ids.length) throw new Error('Palomea al menos una nota');
+            const { error } = await sb.from('ventas').update({ facturada: true, folio_factura: val('mf-f') }).in('id', ids);
+            if (error) throw error; close(); toast(`${ids.length} notas marcadas como facturadas`, 'ok'); VISTAS_DUENO.contador(main);
+          });
+        });
     });
     document.getElementById('ct-xls').onclick = () => {
       const wb = XLSX.utils.book_new();
