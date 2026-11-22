@@ -76,7 +76,7 @@ async function busy(btn, fn) {
   finally { if (btn) { btn.disabled = false; btn.innerHTML = t; } }
 }
 async function domicilioPeriodo() {
-  const data = await fetchAll(() => sb.from('pedidos').select('id,nombre,marcas,cantidad,entregado_cantidad,monto_cobrado,forma_pago_real,entregado_en,asignado_a')
+  const data = await fetchAll(() => sb.from('pedidos').select('id,nombre,marcas,cantidad,entregado_cantidad,monto_cobrado,forma_pago_real,entregado_en,asignado_a,alcalina,precio_alcalina')
     .eq('estado', 'entregado').gte('entregado_en', inicioMX(S.periodo.desde)).lt('entregado_en', inicioMX(addDays(S.periodo.hasta, 1))).order('entregado_en', { ascending: false }));
   const t = f => data.filter(p => !f || p.forma_pago_real === f).reduce((x, p) => x + num(p.monto_cobrado), 0);
   return { lista: data, n: data.length, garrafones: data.reduce((x, p) => x + num(p.entregado_cantidad), 0), total: t(), efectivo: t('efectivo'), transferencia: t('transferencia') };
@@ -1023,11 +1023,35 @@ const VISTAS_DUENO = {
     const dom = await domP;
     const vivas = data.filter(v => !v.cancelada), tf = f => vivas.filter(v => v.forma_pago === f).reduce((x, v) => x + num(v.total), 0);
     const totPE = vivas.reduce((x, v) => x + num(v.total), 0);
+    // Ventas por producto: planta (mostrador y distribuidores), empresas, domicilio (lo que entregó Javier)
+    const jav = S.clientes.find(c => c.nombre === 'Javier (reparto)')?.id;
+    const pp = {}, fila = n => pp[n] = pp[n] || { n, planta: [0, 0], emp: [0, 0], dom: [0, 0] };
+    for (const v of vivas) {
+      if (jav && v.cliente_id === jav) continue;   // pago de Javier en planta: ya se cuenta en Domicilio
+      const c = S.clientes.find(x => x.id === v.cliente_id);
+      const k = v.canal === 'empresa' || c?.tipo === 'empresa' || c?.tipo === 'restaurante' ? 'emp' : 'planta';
+      for (const d of v.venta_detalle || []) { const r = fila(prod(d.producto_id) || 'Otro')[k]; r[0] += num(d.cantidad); r[1] += num(d.cantidad) * num(d.precio_unitario); }
+    }
+    for (const pd of dom.lista) {
+      const q = num(pd.entregado_cantidad), a = Math.min(num(pd.alcalina), q), am = a * num(pd.precio_alcalina);
+      if (q - a > 0) { const r = fila('Relleno garrafón').dom; r[0] += q - a; r[1] += num(pd.monto_cobrado) - am; }
+      if (a > 0) { const r = fila('Agua alcalina').dom; r[0] += a; r[1] += am; }
+    }
+    const prodRows = Object.values(pp).map(r => ({ ...r, q: r.planta[0] + r.emp[0] + r.dom[0], m: r.planta[1] + r.emp[1] + r.dom[1] })).sort((a, b) => b.m - a.m);
+    const celda = x => x[0] ? `${fmtN(x[0])}<br><span class="mut small">${money0(x[1])}</span>` : '<span class="mut">—</span>';
+    const sumC = k => prodRows.reduce((t, r) => [t[0] + r[k][0], t[1] + r[k][1]], [0, 0]);
+    const cardProd = `<div class="card"><div class="row"><h2 style="margin:0">Por producto</h2><span class="sp"></span><span class="mut small">Piezas y dinero del periodo</span></div>
+      <div class="tw"><table><thead><tr><th>Producto</th><th class="n">Planta</th><th class="n">Empresas</th><th class="n">Domicilio</th><th class="n">Total</th></tr></thead><tbody>
+      ${prodRows.map(r => `<tr><td><b>${esc(r.n)}</b></td><td class="n">${celda(r.planta)}</td><td class="n">${celda(r.emp)}</td><td class="n">${celda(r.dom)}</td><td class="n"><b>${fmtN(r.q)}</b><br><b class="small">${money0(r.m)}</b></td></tr>`).join('') || '<tr><td colspan="5" class="empty">Sin ventas</td></tr>'}
+      ${prodRows.length ? `<tr><td><b>Total</b></td><td class="n">${celda(sumC('planta'))}</td><td class="n">${celda(sumC('emp'))}</td><td class="n">${celda(sumC('dom'))}</td><td class="n"><b>${money0(prodRows.reduce((t, r) => t + r.m, 0))}</b></td></tr>` : ''}
+      </tbody></table></div>
+      <p class="mut small">Planta: mostrador y distribuidores. Empresas: entregas de Javier y empresas que recogen. Domicilio: pedidos que entregó Javier (sus pagos en caja no se cuentan dos veces).</p></div>`;
     main.innerHTML = per.html + `<div class="grid g4" style="margin-bottom:16px">
       <div class="kpi"><div class="l">Total del periodo</div><div class="v">${money0(totPE)}</div><div class="s">Incluye lo que Javier pagó en planta</div></div>
       <div class="kpi"><div class="l">Planta y empresas</div><div class="v">${money0(totPE)}</div><div class="s">${fmtN(vivas.length)} ventas · crédito ${money0(tf('credito'))}</div></div>
       <div class="kpi"><div class="l">Domicilio (cobró Javier)</div><div class="v">${money0(dom.total)}</div><div class="s">${fmtN(dom.n)} pedidos · ya va dentro del total al pagarlo en planta</div></div>
       <div class="kpi"><div class="l">Efectivo / Transferencia</div><div class="v" style="font-size:20px">${money0(tf('efectivo'))} / ${money0(tf('transferencia'))}</div><div class="s">Cobrado en planta y empresas</div></div></div>
+    ${cardProd}
     <div class="card"><div class="row"><h2 style="margin:0">Ventas</h2><span class="sp"></span><span class="tag inf">${data.filter(v => !v.cancelada).length} ventas · ${money(data.filter(v => !v.cancelada).reduce((s, v) => s + num(v.total), 0))}</span></div>
       <div class="tw"><table><thead><tr><th>Fecha</th><th>Vendió</th><th>Productos</th><th>Cliente</th><th>Pago</th><th class="n">Total</th><th></th></tr></thead><tbody>
       ${data.map(v => `<tr><td>${fmtFecha(v.fecha)}</td><td>${nom(v.usuario_id)}</td><td>${v.venta_detalle.map(d => `${fmtN(d.cantidad)} ${esc(prod(d.producto_id))}`).join(', ')}</td><td>${cli(v.cliente_id)}</td>
