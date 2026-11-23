@@ -76,7 +76,7 @@ async function busy(btn, fn) {
   finally { if (btn) { btn.disabled = false; btn.innerHTML = t; } }
 }
 async function domicilioPeriodo() {
-  const data = await fetchAll(() => sb.from('pedidos').select('id,nombre,marcas,cantidad,entregado_cantidad,monto_cobrado,forma_pago_real,entregado_en,asignado_a,alcalina,precio_alcalina')
+  const data = await fetchAll(() => sb.from('pedidos').select('*')
     .eq('estado', 'entregado').gte('entregado_en', inicioMX(S.periodo.desde)).lt('entregado_en', inicioMX(addDays(S.periodo.hasta, 1))).order('entregado_en', { ascending: false }));
   const t = f => data.filter(p => !f || p.forma_pago_real === f).reduce((x, p) => x + num(p.monto_cobrado), 0);
   return { lista: data, n: data.length, garrafones: data.reduce((x, p) => x + num(p.entregado_cantidad), 0), total: t(), efectivo: t('efectivo'), transferencia: t('transferencia') };
@@ -183,7 +183,7 @@ async function salir() { await sb.auth.signOut(); S.turno = null; S.tab = null; 
 
 /* ---------------- estructura general ---------------- */
 const TABS_PLANTA = [['vender','Vender'],['pedidos','Pedidos'],['javier','Javier'],['prestamos','Préstamos'],['pipa','Pipa'],['compra','Compras y caja'],['bitacora','Bitácora'],['cerrar','Cerrar turno']];
-const TABS_DUENO = [['resumen','Resumen'],['pedidosD','Pedidos'],['reparto','Reparto'],['prestamosD','Préstamos'],['turnos','Turnos'],['ventas','Ventas'],['cobrar','Por cobrar'],['inventario','Inventario'],['productos','Productos'],
+const TABS_DUENO = [['resumen','Resumen'],['pedidosD','Pedidos'],['javierD','Javier'],['reparto','Reparto'],['prestamosD','Préstamos'],['turnos','Turnos'],['ventas','Ventas'],['cobrar','Por cobrar'],['inventario','Inventario'],['productos','Productos'],
   ['clientes','Clientes'],['contador','Contador'],['fijos','Gastos fijos'],['mant','Mantenimiento'],['bitacoraD','Bitácora'],
   ['usuarios','Usuarios'],['ajustes','Ajustes'],['planta','Operar planta'],['repartir','Repartir']];
 
@@ -806,6 +806,53 @@ function costoProducto(p) {
 const hbars = (rows, lab, v, fmt = money0) => { const mx = Math.max(1, ...rows.map(r => num(r[v]))); return rows.map(r => `<div class="hbar"><span class="lb">${esc(r[lab])}</span><span class="tr"><i style="width:${num(r[v]) / mx * 100}%"></i></span><span class="vl">${fmt(r[v])}</span></div>`).join(''); };
 
 const VISTAS_DUENO = {
+  /* ---------- JAVIER (dueños): corte rápido de todo lo suyo ---------- */
+  async javierD(main) {
+    const per = selectorPeriodo(() => VISTAS_DUENO.javierD(main));
+    main.innerHTML = per.html + '<div id="jd" class="empty">Calculando…</div>';
+    per.bind();
+    const reps = new Set(S.perfiles.filter(p => p.rol === 'repartidor').map(p => p.id));
+    const rango = q => q.gte('fecha', inicioMX(S.periodo.desde)).lt('fecha', inicioMX(addDays(S.periodo.hasta, 1)));
+    const [dom, ents, saldo, pros] = await Promise.all([
+      domicilioPeriodo(),
+      fetchAll(() => rango(sb.from('entregas').select('id,fecha,cliente_id,llenos,nuevos,usuario_id,ventas(total,forma_pago,cancelada)')).order('fecha', { ascending: false })).catch(() => []),
+      sb.rpc('saldo_javier').then(r => r.data).catch(() => null),
+      fetchAll(() => rango(sb.from('prospeccion').select('*')).order('fecha', { ascending: false })).catch(() => [])
+    ]);
+    const peds = dom.lista.filter(p => reps.has(p.asignado_a));
+    const ent = (ents || []).filter(e => !e.usuario_id || reps.has(e.usuario_id) || !S.perfiles.find(p => p.id === e.usuario_id));
+    const z = () => ({ efectivo: 0, transferencia: 0, credito: 0, garr: 0, n: 0 });
+    const E = z(), D = z(), R = z();
+    ent.forEach(e => { const v = e.ventas; if (v?.cancelada) return; E.n++; E.garr += num(e.llenos) + num(e.nuevos); if (v && E[v.forma_pago] !== undefined) E[v.forma_pago] += num(v.total); });
+    peds.forEach(p => { const o = p.origen === 'ruta' ? R : D; o.n++; o.garr += num(p.entregado_cantidad); if (o[p.forma_pago_real] !== undefined) o[p.forma_pago_real] += num(p.monto_cobrado); });
+    const tot = o => o.efectivo + o.transferencia + o.credito;
+    const T = ['efectivo', 'transferencia', 'credito', 'garr', 'n'].reduce((a, k) => (a[k] = E[k] + D[k] + R[k], a), {});
+    const fila = (t, sub, o, cred = true) => `<tr><td><b>${t}</b><br><span class="mut small">${sub}</span></td><td class="n">${money0(o.efectivo)}</td><td class="n">${money0(o.transferencia)}</td><td class="n">${cred ? money0(o.credito) : '—'}</td><td class="n"><b>${money0(tot(o))}</b></td><td class="n">${fmtN(o.garr)}</td></tr>`;
+    const visitas = (pros || []).reduce((x, p) => x + num(p.visitas), 0);
+    const cliN = id => esc(S.clientes.find(c => c.id === id)?.nombre || 'Empresa');
+    const lista = [
+      ...ent.map(e => ({ f: e.fecha, t: 'Empresa', n: cliN(e.cliente_id), g: num(e.llenos) + num(e.nuevos), fp: e.ventas?.forma_pago || '', m: num(e.ventas?.total), x: e.ventas?.cancelada })),
+      ...peds.map(p => ({ f: p.entregado_en, t: p.origen === 'ruta' ? 'En ruta' : 'Domicilio', n: esc(p.origen === 'ruta' ? (p.domicilio || 'En ruta') : p.nombre), g: num(p.entregado_cantidad), fp: p.forma_pago_real || '', m: num(p.monto_cobrado) }))
+    ].sort((a, b) => String(b.f).localeCompare(String(a.f)));
+    document.getElementById('jd').outerHTML = `
+    <div class="grid g4" style="margin-bottom:16px">
+      <div class="kpi"><div class="l">Total que movió Javier</div><div class="v">${money0(tot(T))}</div><div class="s">${fmtN(T.garr)} garrafones · ${fmtN(T.n)} entregas</div></div>
+      <div class="kpi"><div class="l">Efectivo / Transferencia</div><div class="v" style="font-size:20px">${money0(T.efectivo)} / ${money0(T.transferencia)}</div><div class="s">Crédito empresas ${money0(T.credito)}</div></div>
+      <div class="kpi"><div class="l">Debe pagar en caja</div><div class="v" style="font-size:20px">${saldo ? `${money0(num(saldo.efectivo.cobrado) - num(saldo.efectivo.pagado))} / ${money0(num(saldo.transferencia.cobrado) - num(saldo.transferencia.pagado))}` : '—'}</div><div class="s">Efectivo / Transferencia · pendiente ahorita</div></div>
+      <div class="kpi"><div class="l">Prospección</div><div class="v">${fmtN(visitas)}</div><div class="s">visitas · ${fmtN(R.garr)} garrafones vendidos en ruta</div></div></div>
+    <div class="card" style="margin-bottom:16px"><h2>Corte de Javier</h2><div class="tw"><table>
+      <thead><tr><th></th><th class="n">Efectivo</th><th class="n">Transferencia</th><th class="n">Crédito</th><th class="n">Total</th><th class="n">Garrafones</th></tr></thead><tbody>
+      ${fila('Empresas', `${fmtN(E.n)} entregas · el dinero va directo a ustedes`, E)}
+      ${fila('Pedidos Real del Valle', `${fmtN(D.n)} pedidos · lo paga en caja`, D, false)}
+      ${fila('Venta en ruta', `${fmtN(R.n)} registros · lo paga en caja`, R, false)}
+      ${fila('Total', '', T)}
+      </tbody></table></div></div>
+    <div class="card"><div class="row"><h2 style="margin:0">Entregas</h2><span class="sp"></span><span class="tag inf">${fmtN(lista.length)}</span></div>
+      <div class="tw"><table><thead><tr><th>Hora</th><th>Tipo</th><th>Cliente / lugar</th><th class="n">Garrafones</th><th>Pago</th><th class="n">Total</th></tr></thead><tbody>
+      ${lista.map(r => `<tr${r.x ? ' style="opacity:.5"' : ''}><td>${fmtFecha(r.f)}</td><td><span class="tag${r.t === 'Empresa' ? ' inf' : r.t === 'En ruta' ? ' warn' : ''}">${r.t}</span></td><td>${r.n}${r.x ? ' <span class="tag bad">Cancelada</span>' : ''}</td><td class="n">${fmtN(r.g)}</td><td>${esc(r.fp)}</td><td class="n">${money(r.m)}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">Sin entregas en el periodo</td></tr>'}
+      </tbody></table></div></div>`;
+  },
+
   /* ---------- RESUMEN ---------- */
   async resumen(main) {
     const per = selectorPeriodo(() => VISTAS_DUENO.resumen(main));
