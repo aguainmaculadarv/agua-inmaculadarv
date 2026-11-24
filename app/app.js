@@ -971,7 +971,7 @@ const VISTAS_DUENO = {
       modal(`<h2>Turno de ${nom(t.usuario_id)}</h2><p class="mut">${fmtFecha(t.abierto_en)} → ${t.cerrado_en ? fmtFecha(t.cerrado_en) : 'abierto'}</p>
         <table><tbody>
         <tr><td>Caja chica inicial</td><td class="n">${money(t.caja_inicial)} ${t.caja_inicial_ok ? '' : '<span class="tag bad">Incompleta</span>'}</td></tr>
-        <tr><td>Medidor inicial / final</td><td class="n">${fmtN(t.medidor_inicial, 1)} / ${t.medidor_final === null ? '—' : fmtN(t.medidor_final, 1)}</td></tr>
+        <tr><td>Medidor inicial / final <button class="btn sm ghost" id="t-med">Corregir</button></td><td class="n">${fmtN(t.medidor_inicial, 1)} / ${t.medidor_final === null ? '—' : fmtN(t.medidor_final, 1)}</td></tr>
         <tr><td>Litros medidor / vendidos</td><td class="n">${t.litros_medidor ?? '—'} / ${t.litros_vendidos ?? '—'}</td></tr>
         <tr><td>Garrafones nuevos inicio / vendidos / final</td><td class="n">${t.garrafones_nuevos_ini ?? '—'} / ${t.garrafones_nuevos_vendidos ?? '—'} / ${t.garrafones_nuevos_fin ?? '—'}</td></tr>
         <tr><td>Ventas efectivo</td><td class="n">${money(t.ventas_efectivo)}</td></tr>
@@ -985,6 +985,17 @@ const VISTAS_DUENO = {
         <div class="row" style="margin-top:14px">${t.estado === 'abierto' ? '<button class="btn bad" id="t-forzar">Cerrar este turno</button>' : ''}<span class="sp"></span><button class="btn ghost" data-close>Cerrar</button></div>`,
         (box, close) => {
           box.querySelectorAll('[data-foto]').forEach(b => b.onclick = () => verFoto(b.dataset.foto));
+          box.querySelector('#t-med').onclick = () => { close(); modal(`<h2>Corregir medidor</h2><p class="mut">Turno de ${nom(t.usuario_id)} · ${fmtFecha(t.abierto_en)}</p>
+            <div class="grid g2"><div class="field"><label>Lectura inicial</label><input type="number" id="cm-i" inputmode="decimal" value="${t.medidor_inicial ?? ''}"></div>
+            ${t.estado === 'cerrado' ? `<div class="field"><label>Lectura final</label><input type="number" id="cm-f" inputmode="decimal" value="${t.medidor_final ?? ''}"></div>` : ''}</div>
+            <div class="field"><label>Motivo</label><input type="text" id="cm-m" placeholder="ej. Se capturó de más al abrir"></div>
+            <div class="row"><button class="btn ghost" data-close>Cancelar</button><span class="sp"></span><button class="btn" id="cm-b">Guardar</button></div>`,
+            (b2, c2) => b2.querySelector('#cm-b').onclick = e => busy(e.currentTarget, async () => {
+              const ini = nval('cm-i'); if (ini === null) throw new Error('Escribe la lectura inicial');
+              if (!val('cm-m')) throw new Error('Escribe el motivo');
+              const { error } = await sb.rpc('corregir_medidor', { p_turno_id: t.id, p_inicial: ini, p_final: t.estado === 'cerrado' ? nval('cm-f') : null, p_motivo: val('cm-m') });
+              if (error) throw error; c2(); toast('Medidor corregido. Ya puede cerrar su turno.', 'ok'); VISTAS_DUENO.turnos(main);
+            })); };
           const fz = box.querySelector('#t-forzar');
           if (fz) fz.onclick = () => { close(); cerrarTurnoAjeno(t, main); };
         });
