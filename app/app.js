@@ -864,7 +864,7 @@ const VISTAS_DUENO = {
       sb.from('mantenimientos').select('*').eq('activo', true),
       sb.from('turnos').select('id,abierto_en,usuario_id').eq('estado', 'abierto'),
       domicilioPeriodo(),
-      fetchAll(() => sb.from('entregas').select('id,llenos,nuevos,ventas(total,forma_pago,cancelada)')
+      fetchAll(() => sb.from('entregas').select('id,llenos,nuevos,usuario_id,ventas(total,forma_pago,cancelada)')
         .gte('fecha', inicioMX(S.periodo.desde)).lt('fecha', inicioMX(addDays(S.periodo.hasta, 1))).order('id')).catch(() => []),
       fetchAll(() => sb.from('ventas').select('id,usuario_id,total,forma_pago,canal').eq('cancelada', false)
         .gte('fecha', inicioMX(S.periodo.desde)).lt('fecha', inicioMX(addDays(S.periodo.hasta, 1))).order('id')).catch(() => [])
@@ -872,7 +872,8 @@ const VISTAS_DUENO = {
     if (error) throw error;
     // Reparto de Javier: empresas (entregas con su venta) y domicilio (pedidos entregados)
     const emp = { efectivo: 0, transferencia: 0, credito: 0, garr: 0, n: 0 };
-    (entEmp || []).forEach(e => { emp.n++; emp.garr += num(e.llenos) + num(e.nuevos); const v = e.ventas; if (v && !v.cancelada && emp[v.forma_pago] !== undefined) emp[v.forma_pago] += num(v.total); });
+    const esDueno = id => S.perfiles.find(p => p.id === id)?.rol === 'dueno';
+    (entEmp || []).filter(e => !esDueno(e.usuario_id)).forEach(e => { emp.n++; emp.garr += num(e.llenos) + num(e.nuevos); const v = e.ventas; if (v && !v.cancelada && emp[v.forma_pago] !== undefined) emp[v.forma_pago] += num(v.total); });
     const empTot = emp.efectivo + emp.transferencia + emp.credito;
     // Cuadritos por persona: efectivo / transferencia / crédito (repartidor incluye domicilio)
     const porPer = {};
