@@ -129,8 +129,8 @@ async function renderReparto() {
   if (!S.turno) return vistaAbrirReparto(shell(panel));
   const t = S.turno.tipo;
   const tabs = (t === 'camioneta'
-    ? [['r_entregar', 'Entregar'], ['r_ruta', 'Venta en ruta'], ['r_pagar', 'Pagar en caja'], ['r_recargar', 'Cargar más'], ['r_cerrar', 'Cerrar turno']]
-    : [['r_pedidos', 'Pedidos'], ['r_ruta', 'Venta en ruta'], ['r_pagar', 'Pagar en caja'], ['r_cerrar', 'Cerrar turno']]).concat(panel || []);
+    ? [['r_entregar', 'Entregar'], ['r_ruta', 'Agregar venta'], ['r_pagar', 'Pagar en caja'], ['r_recargar', 'Cargar más'], ['r_cerrar', 'Cerrar turno']]
+    : [['r_pedidos', 'Pedidos'], ['r_ruta', 'Agregar venta'], ['r_pagar', 'Pagar en caja'], ['r_cerrar', 'Cerrar turno']]).concat(panel || []);
   if (!tabs.some(x => x[0] === S.tab) || S.tab === '_panel') S.tab = tabs[0][0];
   const main = shell(tabs);
   if (t === 'moto') escucharPedidos();
@@ -354,30 +354,55 @@ const VISTAS_REPARTO = {
     });
   },
 
-  /* ---------- VENTA EN RUTA: lo que vendió sin pedido + prospección ---------- */
+  /* ---------- AGREGAR VENTA: venta rápida sin registrar cliente + prospección ---------- */
   async r_ruta(main) {
-    const rel = S.productos.find(p => p.nombre === 'Relleno garrafón');
-    const pu = num(rel?.precio_domicilio) || num(rel?.precio) || 28;
-    const campo = (id, t, ph) => `<div class="field"><label>${t}</label><input type="number" id="${id}" inputmode="numeric" min="0" placeholder="${ph}" style="font-size:22px"></div>`;
-    main.innerHTML = `<div class="card"><h2>Venta en ruta</h2>
-      <p class="mut">Para lo que vendiste sin pedido en la app (en la calle, con clientes nuevos). No necesitas teléfono ni dirección. Puedes registrarlo al final del día o cuando quieras.</p>
-      <div class="grid g2">${campo('vr-e', 'Garrafones cobrados en efectivo', '0')}${campo('vr-t', 'Garrafones por transferencia', '0')}</div>
-      ${campo('vr-v', 'Negocios o casas que visitaste para ofrecer agua', '0')}
-      <div class="field"><label>¿Dónde? (opcional)</label><input type="text" id="vr-l" placeholder="ej. Hospital, Av. Real del Valle"></div>
-      <div class="alert inf" id="vr-tot">A ${money(pu)} por garrafón.</div>
-      <div class="row"><span class="sp"></span><button class="btn big ok" id="vr-b">Guardar</button></div></div>`;
-    const tot = () => { const e = nval('vr-e') || 0, t = nval('vr-t') || 0;
-      document.getElementById('vr-tot').innerHTML = e + t ? `${e + t} garrafones a ${money(pu)}: <b>${money((e + t) * pu)}</b>${e ? ` · efectivo ${money(e * pu)}` : ''}${t ? ` · transferencia ${money(t * pu)}` : ''}` : `A ${money(pu)} por garrafón.`; };
-    ['vr-e', 'vr-t'].forEach(id => document.getElementById(id).oninput = tot);
+    const st = S._vr = S._vr || { pu: 28, fp: 'efectivo' };
+    const { data: hoy } = await sb.from('pedidos').select('id,entregado_en,entregado_cantidad,precio_unitario,monto_cobrado,forma_pago_real,domicilio')
+      .eq('turno_id', S.turno.id).eq('origen', 'ruta').eq('estado', 'entregado').order('entregado_en', { ascending: false });
+    const lista = hoy || [];
+    const chip = (v, on) => `<button class="btn ${on ? '' : 'ghost'}" data-pu="${v}" style="min-width:64px">${v === 'otro' ? 'Otro' : money0(v)}</button>`;
+    const esOtro = ![25, 28, 30].includes(st.pu);
+    main.innerHTML = `<div class="card"><h2>Agregar venta</h2>
+      <p class="mut">Para cuando un cliente te habla o le vendes en la calle. No registras al cliente: solo la venta. Se suma sola a "Pagar en caja".</p>
+      <div class="field"><label>Garrafones</label><input type="number" id="vr-q" inputmode="numeric" min="1" placeholder="0" style="font-size:26px"></div>
+      <div class="field"><label>Precio por garrafón</label><div class="row" style="gap:8px;flex-wrap:wrap">${[25, 28, 30].map(v => chip(v, st.pu === v)).join('')}${chip('otro', esOtro)}</div>
+        <input type="number" id="vr-pu" inputmode="decimal" placeholder="Precio" value="${esOtro ? st.pu : ''}" class="${esOtro ? '' : 'hidden'}" style="margin-top:8px"></div>
+      <div class="field"><label>…o el total que cobraste (opcional)</label><input type="number" id="vr-tot" inputmode="decimal" placeholder="ej. 84"></div>
+      <div class="field"><label>Cómo te pagó</label><div class="row" style="gap:8px">
+        <button class="btn ${st.fp === 'efectivo' ? '' : 'ghost'}" data-fp="efectivo">Efectivo</button><button class="btn ${st.fp === 'transferencia' ? '' : 'ghost'}" data-fp="transferencia">Transferencia</button></div></div>
+      <div class="field"><label>Nombre o lugar (opcional)</label><input type="text" id="vr-n" placeholder="ej. Doña Lupe, tienda de la esquina"></div>
+      <div class="alert inf" id="vr-res">Escribe cuántos garrafones.</div>
+      <div class="row"><span class="sp"></span><button class="btn big ok" id="vr-b">Agregar venta</button></div></div>
+    <div class="card"><div class="row"><h2 style="margin:0">Agregaste en este turno</h2><span class="sp"></span><span class="tag inf">${lista.length} ventas · ${money0(lista.reduce((x, p) => x + num(p.monto_cobrado), 0))}</span></div>
+      <div class="tw"><table><tbody>${lista.map(p => `<tr><td>${fmtHora(p.entregado_en)}</td><td>${esc(p.domicilio || '')}</td><td class="n">${fmtN(p.entregado_cantidad)} × ${money0(p.precio_unitario)}</td><td>${esc(p.forma_pago_real)}</td><td class="n"><b>${money0(p.monto_cobrado)}</b></td></tr>`).join('') || '<tr><td class="empty">Todavía no agregas ventas</td></tr>'}</tbody></table></div></div>
+    <div class="card"><h2>Visitas para ofrecer agua</h2>
+      <div class="grid g2"><div class="field"><label>¿Cuántos negocios o casas?</label><input type="number" id="vv-n" inputmode="numeric" min="1" placeholder="0"></div>
+      <div class="field"><label>¿Dónde? (opcional)</label><input type="text" id="vv-l" placeholder="ej. Hospital"></div></div>
+      <div class="row"><span class="sp"></span><button class="btn" id="vv-b">Guardar visitas</button></div></div>`;
+    const precio = () => { const q = nval('vr-q') || 0, t = nval('vr-tot'); if (t && q) return t / q; return st.pu === 'otro' ? (nval('vr-pu') || 0) : st.pu; };
+    const pinta = () => { const q = nval('vr-q') || 0, pu = precio();
+      document.getElementById('vr-res').innerHTML = q ? `${q} ${q === 1 ? 'garrafón' : 'garrafones'} × ${money(pu)} = <b>${money(q * pu)}</b> · ${st.fp}` : 'Escribe cuántos garrafones.'; };
+    main.querySelectorAll('[data-pu]').forEach(b => b.onclick = () => {
+      const v = b.dataset.pu; main.querySelectorAll('[data-pu]').forEach(x => x.classList.toggle('ghost', x !== b));
+      const inp = document.getElementById('vr-pu'); inp.classList.toggle('hidden', v !== 'otro');
+      st.pu = v === 'otro' ? 'otro' : Number(v); if (v === 'otro') inp.focus(); pinta(); });
+    main.querySelectorAll('[data-fp]').forEach(b => b.onclick = () => { st.fp = b.dataset.fp; main.querySelectorAll('[data-fp]').forEach(x => x.classList.toggle('ghost', x !== b)); pinta(); });
+    ['vr-q', 'vr-pu', 'vr-tot'].forEach(id => document.getElementById(id).oninput = pinta);
+    if (esOtro) st.pu = 'otro';
     document.getElementById('vr-b').onclick = ev => busy(ev.currentTarget, async () => {
-      const e = nval('vr-e') || 0, t = nval('vr-t') || 0, v = nval('vr-v') || 0;
-      if (e < 0 || t < 0 || v < 0) throw new Error('Las cantidades no pueden ser negativas');
-      if (!(e + t + v)) throw new Error('Escribe al menos una cantidad');
-      if (!(await confirmar(`¿Guardar ${e + t} garrafones (${money((e + t) * pu)})${v ? ` y ${v} visitas` : ''}?`, 'Sí, guardar'))) return;
-      const { error } = await sb.rpc('venta_en_ruta', { p_turno_id: S.turno.id, p_efectivo: e, p_transferencia: t, p_visitas: v, p_lugar: val('vr-l') || null });
+      const q = nval('vr-q'), pu = precio();
+      if (!q || q < 1) throw new Error('Escribe cuántos garrafones');
+      if (!pu || pu < 5) throw new Error('Elige el precio o escribe el total');
+      if (!(await confirmar(`¿Agregar ${q} ${q === 1 ? 'garrafón' : 'garrafones'} a ${money(pu)} = <b>${money(q * pu)}</b> en ${st.fp}?`, 'Sí, agregar'))) return;
+      const { error } = await sb.rpc('agregar_venta_ruta', { p_turno_id: S.turno.id, p_cantidad: q, p_precio: Math.round(pu * 100) / 100, p_forma: st.fp, p_nota: val('vr-n') || null });
       if (error) throw error;
-      toast(e + t ? 'Guardado. Págalo en caja.' : 'Visitas guardadas', 'ok');
-      if (e + t) { S.tab = 'r_pagar'; renderReparto(); } else VISTAS_REPARTO.r_ruta(main);
+      if (st.pu === 'otro') st.pu = Math.round(pu * 100) / 100;
+      toast('Venta agregada', 'ok'); VISTAS_REPARTO.r_ruta(main);
+    });
+    document.getElementById('vv-b').onclick = ev => busy(ev.currentTarget, async () => {
+      const n = nval('vv-n'); if (!n || n < 1) throw new Error('Escribe cuántas visitas');
+      const { error } = await sb.rpc('registrar_visitas', { p_turno_id: S.turno.id, p_visitas: n, p_lugar: val('vv-l') || null });
+      if (error) throw error; toast('Visitas guardadas', 'ok'); VISTAS_REPARTO.r_ruta(main);
     });
   },
 

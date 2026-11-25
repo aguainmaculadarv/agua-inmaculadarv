@@ -839,12 +839,12 @@ const VISTAS_DUENO = {
       <div class="kpi"><div class="l">Total que movió Javier</div><div class="v">${money0(tot(T))}</div><div class="s">${fmtN(T.garr)} garrafones · ${fmtN(T.n)} entregas</div></div>
       <div class="kpi"><div class="l">Efectivo / Transferencia</div><div class="v" style="font-size:20px">${money0(T.efectivo)} / ${money0(T.transferencia)}</div><div class="s">Crédito empresas ${money0(T.credito)}</div></div>
       <div class="kpi"><div class="l">Debe pagar en caja</div><div class="v" style="font-size:20px">${saldo ? `${money0(num(saldo.efectivo.cobrado) - num(saldo.efectivo.pagado))} / ${money0(num(saldo.transferencia.cobrado) - num(saldo.transferencia.pagado))}` : '—'}</div><div class="s">Efectivo / Transferencia · pendiente ahorita</div></div>
-      <div class="kpi"><div class="l">Prospección</div><div class="v">${fmtN(visitas)}</div><div class="s">visitas · ${fmtN(R.garr)} garrafones vendidos en ruta</div></div></div>
+      <div class="kpi"><div class="l">Prospección</div><div class="v">${fmtN(visitas)}</div><div class="s">visitas · ${fmtN(R.n)} ventas agregadas (${fmtN(R.garr)} garrafones)</div></div></div>
     <div class="card" style="margin-bottom:16px"><h2>Corte de Javier</h2><div class="tw"><table>
       <thead><tr><th></th><th class="n">Efectivo</th><th class="n">Transferencia</th><th class="n">Crédito</th><th class="n">Total</th><th class="n">Garrafones</th></tr></thead><tbody>
       ${fila('Empresas', `${fmtN(E.n)} entregas · el dinero va directo a ustedes`, E)}
       ${fila('Pedidos Real del Valle', `${fmtN(D.n)} pedidos · lo paga en caja`, D, false)}
-      ${fila('Venta en ruta', `${fmtN(R.n)} registros · lo paga en caja`, R, false)}
+      ${fila('Ventas que agregó Javier', `${fmtN(R.n)} ventas sin pedido · lo paga en caja`, R, false)}
       ${fila('Total', '', T)}
       </tbody></table></div></div>
     <div class="card"><div class="row"><h2 style="margin:0">Entregas</h2><span class="sp"></span><span class="tag inf">${fmtN(lista.length)}</span></div>
