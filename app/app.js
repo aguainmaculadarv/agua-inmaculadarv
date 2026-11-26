@@ -1747,3 +1747,56 @@ async function mostrarTicket(ventaId, recienCobrada) {
 /* ---------------- inicio ---------------- */
 sb.auth.onAuthStateChange((ev) => { if (ev === 'SIGNED_OUT') { S.session = null; } });
 // boot() se llama al final de reparto.js
+
+/* ---------- Constancia de situación fiscal (PDF del SAT) → datos fiscales automáticos ---------- */
+const REGIMENES_SAT = [
+  ['601', 'General de Ley Personas Morales'], ['603', 'Personas Morales con Fines no Lucrativos'], ['605', 'Sueldos y Salarios'],
+  ['606', 'Arrendamiento'], ['607', 'Enajenación o Adquisición de Bienes'], ['608', 'Demás ingresos'], ['610', 'Residentes en el Extranjero'],
+  ['611', 'Dividendos'], ['612', 'Personas Físicas con Actividades Empresariales y Profesionales'], ['614', 'Ingresos por intereses'],
+  ['615', 'Obtención de premios'], ['616', 'Sin obligaciones fiscales'], ['620', 'Sociedades Cooperativas de Producción'],
+  ['621', 'Incorporación Fiscal'], ['622', 'Actividades Agrícolas, Ganaderas, Silvícolas y Pesqueras'], ['623', 'Opcional para Grupos de Sociedades'],
+  ['624', 'Coordinados'], ['625', 'Plataformas Tecnológicas'], ['626', 'Simplificado de Confianza']
+];
+function parseConstancia(raw) {
+  const t = String(raw).replace(/\s+/g, ' ');
+  const sinAc = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const r = {};
+  const rfc = t.match(/RFC:?\s*([A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3})\b/); if (rfc) r.rfc = rfc[1];
+  const rs = t.match(/Denominaci[oó]n\s*\/?\s*Raz[oó]n\s+Social:?\s*(.+?)\s+(?:R[eé]gimen\s+Capital|Nombre\s+Comercial|Fecha\s+inicio|Fecha\s+de\s+inicio)/i);
+  if (rs) r.razon_social = rs[1].trim();
+  else {
+    const nf = t.match(/Nombre\s*\(s\):?\s*(.+?)\s+Primer\s+Apellido:?\s*(.*?)\s+Segundo\s+Apellido:?\s*(.*?)\s+(?:Fecha|Estatus|Nombre\s+Comercial)/i);
+    if (nf) r.razon_social = [nf[1], nf[2], nf[3]].map(x => x.trim()).filter(Boolean).join(' ');
+  }
+  const cp = t.match(/C[oó]digo\s+Postal:?\s*(\d{5})/i); if (cp) r.cp_fiscal = cp[1];
+  const st = sinAc(t), ini = st.search(/regimen(es)?:?\s*regimen\s+fecha/);
+  const zona = ini >= 0 ? st.slice(ini, ini + 1500) : st;
+  let mejor = null;
+  for (const [cod, nom] of REGIMENES_SAT) { const i = zona.indexOf(sinAc(nom)); if (i >= 0 && (mejor === null || i < mejor.i)) mejor = { i, cod, nom }; }
+  if (mejor) r.regimen_fiscal = `${mejor.cod} - ${mejor.nom}`;
+  return r;
+}
+async function textoPDF(file) {
+  if (!window.pdfjsLib) await new Promise((ok, mal) => { const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js'; s.onload = ok; s.onerror = () => mal(new Error('No se pudo cargar el lector de PDF. Revisa el internet.')); document.head.appendChild(s); });
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  let out = '';
+  for (let i = 1; i <= Math.min(pdf.numPages, 3); i++) { const c = await (await pdf.getPage(i)).getTextContent(); out += c.items.map(x => x.str + (x.hasEOL ? '\n' : ' ')).join('') + '\n'; }
+  return out;
+}
+document.addEventListener('change', async ev => {
+  const inp = ev.target; if (!inp || inp.id !== 'ec-cons') return;
+  const file = inp.files?.[0]; if (!file) return;
+  if (!/pdf$/i.test(file.type) && !/\.pdf$/i.test(file.name)) { toast('Con foto no se llenan solos los datos. Pide al cliente el PDF del SAT.', 'warn'); return; }
+  try {
+    toast('Leyendo constancia…');
+    const d = parseConstancia(await textoPDF(file));
+    if (!d.rfc) throw new Error('No encontré el RFC. ¿Es la constancia de situación fiscal del SAT?');
+    const pon = (id, v) => { const e = document.getElementById(id); if (e && v) e.value = v; };
+    pon('ec-rfc', d.rfc); pon('ec-rs', d.razon_social); pon('ec-rg', d.regimen_fiscal); pon('ec-cp', d.cp_fiscal);
+    const uso = document.getElementById('ec-uso'); if (uso && !uso.value) uso.value = 'G03 - Gastos en general';
+    const nom = document.getElementById('ec-n'); if (nom && !nom.value && d.razon_social) nom.value = d.razon_social;
+    const falta = [['razón social', d.razon_social], ['régimen', d.regimen_fiscal], ['código postal', d.cp_fiscal]].filter(x => !x[1]).map(x => x[0]);
+    toast(falta.length ? `Listo, revisa: no encontré ${falta.join(', ')}` : 'Datos fiscales llenados. Revisa y guarda.', falta.length ? 'warn' : 'ok');
+  } catch (e) { toast(errMsg(e), 'bad'); }
+});
