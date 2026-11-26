@@ -617,6 +617,7 @@ async function vistaPedidos(main) {
         : `<div class="field"><label>Garrafones entregados (pidió ${p.cantidad})</label><input type="number" id="ed-q" inputmode="numeric" value="${num(p.entregado_cantidad)}"></div>
            <p>Total cobrado: <b id="ed-t">${money(p.monto_cobrado)}</b></p>`}
       <div class="field"><label>${pend ? 'Paga con' : 'Cómo pagó'}</label><div class="pay" id="ed-fp">${['efectivo', 'transferencia'].map(f => `<button data-fp="${f}" class="${f === fp ? 'on' : ''}">${f === 'efectivo' ? 'Efectivo' : 'Transferencia'}</button>`).join('')}</div></div>
+      <div class="field"><label>Precio por garrafón purificada</label><input type="number" id="ed-pu" inputmode="decimal" value="${num(p.precio_unitario)}"></div>
       <div class="field"><label>Motivo (opcional)</label><input type="text" id="ed-m" placeholder="ej. al final le dejamos 4"></div>
       ${!pend ? '<p class="mut small">Si el turno de Javier ya cerró, su corte de ese día no se recalcula.</p>' : ''}
       <div class="row"><button class="btn ghost" data-close>Cancelar</button><span class="sp"></span><button class="btn ok" id="ed-ok">Guardar cambios</button></div>`, (box, close) => {
@@ -624,9 +625,13 @@ async function vistaPedidos(main) {
       box.querySelectorAll('[data-ep]').forEach(x => x.onclick = () => { const k = x.dataset.ep; if (q[k] < 20) q[k]++; box.querySelector('#' + idk(k)).textContent = q[k]; });
       box.querySelectorAll('[data-em]').forEach(x => x.onclick = () => { const k = x.dataset.em; if (q[k] > 0) q[k]--; box.querySelector('#' + idk(k)).textContent = q[k]; });
       const iq = box.querySelector('#ed-q');
-      if (iq) iq.oninput = () => { box.querySelector('#ed-t').textContent = money(totalPedido(p, num(iq.value))); };
+      const ipu = box.querySelector('#ed-pu');
+      const recalc = () => { if (iq) box.querySelector('#ed-t').textContent = money(totalPedido({ ...p, precio_unitario: num(ipu.value) || p.precio_unitario }, num(iq.value))); };
+      if (iq) iq.oninput = recalc; ipu.oninput = recalc;
       box.querySelector('#ed-ok').onclick = ev => busy(ev.currentTarget, async () => {
         const args = { p_pedido_id: p.id, p_forma_pago: fp, p_motivo: box.querySelector('#ed-m').value || null };
+        const pu = num(ipu.value); if (!(pu >= 5)) throw new Error('Escribe el precio por garrafón');
+        if (pu !== num(p.precio_unitario)) args.p_precio = pu;
         if (pend) {
           const marcas = Object.fromEntries(KEYS.filter(k => q[k] > 0).map(k => [k, q[k]]));
           if (!Object.keys(marcas).length) throw new Error('Deja al menos 1 garrafón, o mejor cancela el pedido');
